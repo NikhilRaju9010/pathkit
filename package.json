@@ -41,7 +41,11 @@
     "test": "jest",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "smoke": "node scripts/smoke-test.js",
+    "prepublishOnly": "npm run build && npm run smoke"
+  },
+  "dependencies": {
+    "ts-morph": "^28.0.0"
   },
   "devDependencies": {
     "@temporalio/testing": "^1.24.0",
@@ -53,7 +57,6 @@
     "eslint": "^10.10.0",
     "jest": "^30.5.1",
     "ts-jest": "^29.4.12",
-    "ts-morph": "^28.0.0",
     "typescript": "^6.0.3"
   }
 }

@@ -13,6 +13,7 @@ Thumbs.db
 
 # npm
 npm-debug.log*
+*.tgz
 
 # Local Claude Code settings (not project config)
 .claude/settings.local.json

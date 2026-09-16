@@ -26,5 +26,8 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Smoke test (installed package layout)
+        run: npm run smoke
+
       - name: Audit
         run: npm audit --audit-level=high
