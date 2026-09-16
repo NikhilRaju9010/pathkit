@@ -13,6 +13,14 @@
   ],
   "license": "MIT",
   "author": "Nikhil Raju Tirlange",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NikhilRaju9010/pathkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NikhilRaju9010/pathkit/issues"
+  },
+  "homepage": "https://github.com/NikhilRaju9010/pathkit#readme",
   "bin": {
     "pathkit": "./bin/pathkit"
   },
