@@ -11,6 +11,8 @@ Check off each milestone as it's completed, per its Definition of Done (full cum
 - [x] **M4** — Detect `Promise.race` timeouts and `condition()` signal-waits.
 - [x] **M5** — Build the graph structure, with explicit cycle handling for retry loops.
 - [x] **M6** — Enumerate all Start→End paths, with loop-aware and hard-capped enumeration.
-- [ ] **M7** — Mermaid rendering, CLI wiring (`pathkit analyze`), CLI-level error-handling tests, docs finalization.
+- [x] **M7** — Mermaid rendering, CLI wiring (`pathkit analyze`), CLI-level error-handling tests, docs finalization.
+
+**v1 (Gap 1: static path/branch analysis) is complete as of M7.** Gap 2 (coverage tracking of which paths tests actually exercise) is intentionally out of scope here and belongs to a future plan — see `temporal-pathkit-idea.md`.
 
 Full milestone details, the non-negotiable quality bar, and the verification approach live in the plan document this file mirrors (kept outside the repo, in the Claude Code plan history). This file is the durable, human-readable checklist that travels with the repo itself.

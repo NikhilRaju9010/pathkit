@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then renders the result as a Mermaid diagram.
 
-> **Status:** early development (v0.1.0). The CLI currently only supports `pathkit --version`. Branch detection and graph generation are not implemented yet — see [PLAN.md](./PLAN.md) for the milestone roadmap and [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
+> **Status:** v0.1.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops). Does not yet track which paths your tests actually exercise (coverage) — that's a deliberately separate, later scope. See [PLAN.md](./PLAN.md) for the milestone roadmap and [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
 
 ## Install
 
@@ -15,10 +15,78 @@ npm install -D @nikhilrajutirlange/pathkit
 ## Usage
 
 ```bash
-npx pathkit --version
+npx pathkit analyze <path-to-workflow-file.ts> [--out <path>]
 ```
 
-Full `pathkit analyze <file>` usage and example output will be documented here once implemented (see PLAN.md, milestone M7).
+- Prints, for every exported workflow function in the file, its total path count and a Mermaid flowchart diagram of every possible execution path.
+- `--out <path>` also writes the same report to disk.
+- `pathkit --version` prints the installed version.
+
+### Example
+
+Given a workflow that polls a report job's status in a loop until it completes, fails, or a max attempt count is reached:
+
+```ts
+export async function reportPollingWorkflow(input: GenerateReportInput): Promise<string> {
+  await startReportJob(input.reportId);
+
+  for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) {
+    const status = await checkReportJobStatus(input.reportId);
+
+    if (status === 'complete') {
+      return downloadReportResult(input.reportId);
+    }
+    if (status === 'failed') {
+      return 'report generation failed';
+    }
+
+    await sleep('10 seconds');
+  }
+
+  return 'report generation timed out';
+}
+```
+
+```bash
+npx pathkit analyze demo/report-polling-workflow.ts
+```
+
+outputs:
+
+````
+Workflow: reportPollingWorkflow
+Total paths: 4
+
+```mermaid
+flowchart TD
+  n0(["Start"])
+  n1{"for (let attempt = 1; attempt &lt;= input.maxPollAttempts; attempt++)"}
+  n2{"if (status === &#39;complete&#39;)"}
+  n3{"if (status === &#39;failed&#39;)"}
+  n4(["End"])
+  n0 --> n1
+  n1 -->|iterate| n2
+  n2 -->|false| n3
+  n3 -->|retry| n1
+  n2 -->|true| n4
+  n3 -->|true| n4
+  n1 -->|exit| n4
+```
+````
+
+Paste the fenced ` ```mermaid ` block into the [Mermaid Live Editor](https://mermaid.live) or a GitHub/GitLab markdown file to view the diagram — note the `retry` edge looping back to the polling decision node, representing the loop's retry behavior as a single labeled cycle rather than unrolling every possible iteration count.
+
+More example workflows (order processing, a retry/poll loop, a signal-driven approval flow) are in [`demo/`](./demo).
+
+## What PathKit detects (v1)
+
+- `if`/`else` branches
+- `try`/`catch` blocks that wrap a recognized activity call
+- `Promise.race([..., sleep(ms)])` success-vs-timeout races
+- `condition(fn[, timeout])` signal-waits
+- `while`/`for` loops that wrap a recognized activity call (represented as a labeled `retry` cycle, not unrolled)
+
+`switch` statements and a few other patterns are deliberately out of scope for v1 — see [LIMITATIONS.md](./LIMITATIONS.md) for the full, honest list of what isn't detected and why.
 
 ## Supported Temporal SDK version
 

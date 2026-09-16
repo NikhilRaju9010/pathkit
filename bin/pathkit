@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-const { version } = require('../package.json');
+const { runCli } = require('../dist/cli');
 
-const args = process.argv.slice(2);
+const exitCode = runCli(process.argv.slice(2), {
+  stdout: (text) => process.stdout.write(text),
+  stderr: (text) => process.stderr.write(text),
+});
 
-if (args.includes('--version') || args.includes('-v')) {
-  console.log(version);
-  process.exit(0);
-}
-
-console.error('pathkit: unknown or missing command. Supported: --version');
-process.exit(1);
+process.exit(exitCode);

@@ -1,6 +1,6 @@
 {
   "name": "@nikhilrajutirlange/pathkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Static path/branch graph analysis for Temporal TypeScript workflows — finds every possible execution path (success, failure, retry, timeout, signal) and renders it as a Mermaid diagram.",
   "keywords": [
     "temporal",
@@ -37,9 +37,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build",
     "test": "jest",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@temporalio/testing": "^1.24.0",

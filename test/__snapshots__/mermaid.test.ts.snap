@@ -1,0 +1,14 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`renderMermaid matches the known-good Mermaid output for the retry-loop fixture 1`] = `
+"flowchart TD
+  n0(["Start"])
+  n1{"for (let attempt = 1; attempt &lt;= maxAttempts; attempt++)"}
+  n2{"if (status === &#39;complete&#39;)"}
+  n3(["End"])
+  n0 --> n1
+  n1 -->|iterate| n2
+  n2 -->|retry| n1
+  n2 -->|true| n3
+  n1 -->|exit| n3"
+`;
