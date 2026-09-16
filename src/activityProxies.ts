@@ -1,4 +1,5 @@
 import { CallExpression, Node, SourceFile } from 'ts-morph';
+import { collectLocalImportNames } from './temporalImports';
 
 export interface ActivityBindings {
   /** Local names bound directly to activity functions via destructuring, e.g. `const { foo } = proxyActivities(...)`. */
@@ -20,7 +21,7 @@ const PROXY_ACTIVITY_FUNCTION_NAMES = new Set(['proxyActivities', 'proxyLocalAct
  * actually is.
  */
 export function collectActivityBindings(sourceFile: SourceFile): ActivityBindings {
-  const localProxyFactoryNames = collectLocalProxyFactoryNames(sourceFile);
+  const localProxyFactoryNames = collectLocalImportNames(sourceFile, '@temporalio/workflow', PROXY_ACTIVITY_FUNCTION_NAMES);
 
   const destructuredNames = new Set<string>();
   const proxyObjectNames = new Set<string>();
@@ -49,24 +50,6 @@ export function collectActivityBindings(sourceFile: SourceFile): ActivityBinding
   });
 
   return { destructuredNames, proxyObjectNames };
-}
-
-function collectLocalProxyFactoryNames(sourceFile: SourceFile): Set<string> {
-  const names = new Set<string>();
-
-  for (const importDecl of sourceFile.getImportDeclarations()) {
-    if (importDecl.getModuleSpecifierValue() !== '@temporalio/workflow') continue;
-
-    for (const namedImport of importDecl.getNamedImports()) {
-      const importedName = namedImport.getName();
-      if (PROXY_ACTIVITY_FUNCTION_NAMES.has(importedName)) {
-        const localName = namedImport.getAliasNode()?.getText() ?? importedName;
-        names.add(localName);
-      }
-    }
-  }
-
-  return names;
 }
 
 export function isActivityCall(call: CallExpression, bindings: ActivityBindings): boolean {

@@ -1,5 +1,6 @@
 import { Node, TryStatement } from 'ts-morph';
 import { ActivityBindings, collectActivityBindings, isActivityCall } from './activityProxies';
+import { containsCallMatching } from './astUtils';
 import { WorkflowFunctionNode } from './parser';
 
 export interface TryCatchBranch {
@@ -36,19 +37,7 @@ function isActivityTryCatch(tryStatement: TryStatement, bindings: ActivityBindin
     return false;
   }
 
-  let foundActivityCall = false;
-  tryStatement.getTryBlock().forEachDescendant((node, traversal) => {
-    if (foundActivityCall) {
-      traversal.stop();
-      return;
-    }
-    if (Node.isCallExpression(node) && isActivityCall(node, bindings)) {
-      foundActivityCall = true;
-      traversal.stop();
-    }
-  });
-
-  return foundActivityCall;
+  return containsCallMatching(tryStatement.getTryBlock(), (call) => isActivityCall(call, bindings));
 }
 
 function toTryCatchBranch(tryStatement: TryStatement): TryCatchBranch {

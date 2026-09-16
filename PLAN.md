@@ -8,7 +8,7 @@ Check off each milestone as it's completed, per its Definition of Done (full cum
 - [x] **M1** — Load and parse a single file with ts-morph; return only exported top-level functions (both `export async function` and `export const ... = async () =>` styles).
 - [x] **M2** — Detect if/else branches; `switch` statements explicitly deferred and tested as a no-op.
 - [x] **M3** — Detect try/catch around activity calls (same-file heuristic); start the `demo/` project.
-- [ ] **M4** — Detect `Promise.race` timeouts and `condition()` signal-waits.
+- [x] **M4** — Detect `Promise.race` timeouts and `condition()` signal-waits.
 - [ ] **M5** — Build the graph structure, with explicit cycle handling for retry loops.
 - [ ] **M6** — Enumerate all Start→End paths, with loop-aware and hard-capped enumeration.
 - [ ] **M7** — Mermaid rendering, CLI wiring (`pathkit analyze`), CLI-level error-handling tests, docs finalization.
