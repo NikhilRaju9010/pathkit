@@ -10,7 +10,7 @@ Check off each milestone as it's completed, per its Definition of Done (full cum
 - [x] **M3** — Detect try/catch around activity calls (same-file heuristic); start the `demo/` project.
 - [x] **M4** — Detect `Promise.race` timeouts and `condition()` signal-waits.
 - [x] **M5** — Build the graph structure, with explicit cycle handling for retry loops.
-- [ ] **M6** — Enumerate all Start→End paths, with loop-aware and hard-capped enumeration.
+- [x] **M6** — Enumerate all Start→End paths, with loop-aware and hard-capped enumeration.
 - [ ] **M7** — Mermaid rendering, CLI wiring (`pathkit analyze`), CLI-level error-handling tests, docs finalization.
 
 Full milestone details, the non-negotiable quality bar, and the verification approach live in the plan document this file mirrors (kept outside the repo, in the Claude Code plan history). This file is the durable, human-readable checklist that travels with the repo itself.
