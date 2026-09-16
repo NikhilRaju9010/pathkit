@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# npm
+npm-debug.log*
+
+# Local Claude Code settings (not project config)
+.claude/settings.local.json
