@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then renders the result as a Mermaid diagram.
 
-> **Status:** v0.1.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops). Does not yet track which paths your tests actually exercise (coverage) — that's a deliberately separate, later scope. See [PLAN.md](./PLAN.md) for the milestone roadmap and [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
+> **Status:** v0.2.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise, via a new `pathkit coverage` command) is under active development — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
 
 ## Install
 

@@ -48,7 +48,9 @@
     "ts-morph": "^28.0.0"
   },
   "devDependencies": {
+    "@temporalio/client": "^1.24.0",
     "@temporalio/testing": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
     "@temporalio/workflow": "^1.24.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.20.3",

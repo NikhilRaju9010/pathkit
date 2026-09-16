@@ -2,6 +2,10 @@ node_modules/
 dist/
 coverage/
 
+# Gap 2 — coverage tracking (pathkit coverage)
+*.pathkit-instrumented.ts
+.pathkit/
+
 # OS junk files
 .DS_Store
 Thumbs.db
