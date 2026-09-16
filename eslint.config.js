@@ -4,10 +4,10 @@ const tsPlugin = require('@typescript-eslint/eslint-plugin');
 
 module.exports = [
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'demo/**'],
+    ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'demo/**', 'test/fixtures/**'],
   },
   {
-    files: ['src/**/*.ts', 'test/**/*.ts'],
+    files: ['src/**/*.ts', 'test/**/*.test.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

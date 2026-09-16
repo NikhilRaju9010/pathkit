@@ -23,3 +23,7 @@ PathKit is a TypeScript CLI tool that statically analyzes a Temporal workflow fi
 ## Decisions Log
 
 <!-- Append dated entries here whenever an architecture decision or approach changes during a milestone. Format: `## YYYY-MM-DD — <short title>` followed by what changed and why. -->
+
+## 2026-09-16 — Syntax-validity check uses `Program.getSyntacticDiagnostics`, not `LanguageService`
+
+M1 needed a way to detect "syntactically invalid TypeScript" and throw a clear error. `ts-morph`'s `LanguageService` has no `getSyntacticDiagnostics` method (that was an incorrect assumption in an early draft of `src/parser.ts`); `SourceFile.getPreEmitDiagnostics()` exists but returns *semantic* diagnostics too (type errors, unresolved imports), which would wrongly flag a syntactically valid file that imports `@temporalio/workflow` (needed from M3 onward) as broken, since that import can't resolve when a workflow file is parsed in isolation. The correct call is `project.getProgram().getSyntacticDiagnostics(sourceFile)`, which is syntax-only and won't false-positive on unresolved imports or type errors. `src/parser.ts` uses this exclusively for the "invalid syntax" check.
