@@ -30,6 +30,8 @@ PathKit is a static analysis tool. Rather than silently guessing at code it can'
 
 - **A path is a flat ordered list of edge labels, with no reference to which decision node each label came from.** Two unrelated decision points that happen to produce the same label text (e.g. two different `if` statements both producing a `"true"` edge) are not distinguishable from the path list alone — only from the graph's nodes/edges.
 
-## What this means for Gap 2 (not built in v1)
+## What this means for Gap 2 (in progress)
 
-Everything above describes what PathKit can tell you exists to be tested. It does not track which of those paths your tests actually exercise — that's a deliberately separate scope ("Gap 2" in `temporal-pathkit-idea.md`), left for a later plan so this analysis engine could be built and proven correct on its own first.
+Everything above describes what PathKit can tell you exists to be tested. It does not track which of those paths your tests actually exercise — that's a deliberately separate scope ("Gap 2" in `temporal-pathkit-idea.md`), now under active development (see the "Gap 2" section of `PLAN.md`).
+
+- **`buildWorkflowGraphWithNodeRefs`'s `Node` references are only valid against the exact `ts-morph` source they were built from.** They must never be reused after that source has been mutated (e.g. by instrumentation inserting text into a copy of the file), and never across two different parses of "the same" file, even if the file's text is identical — `ts-morph` node identity is tied to the specific `Project`/`SourceFile` instance that produced it. Any code that needs a node-to-source mapping for a mutated or freshly-reparsed file must call `buildWorkflowGraphWithNodeRefs` again, fresh, against that exact source.

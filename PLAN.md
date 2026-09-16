@@ -28,7 +28,7 @@ Two consequential decisions were locked in before any milestone started (full re
 Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, no config file); `pathkit coverage` is report-only in this pass (no `--min-coverage` threshold); an unmatched trace is a loud warning, not a hard failure; one `prepareCoverageRun` call tracks exactly one named function per file.
 
 - [ ] **G0** — Dependency placement (`@temporalio/client`/`@temporalio/worker` to devDependencies) and naming conventions (instrumented sibling suffix, trace directory) decided and recorded; no user-visible feature yet.
-- [ ] **G1** — `buildWorkflowGraphWithNodeRefs`: additive graph-to-AST-location mapping in `src/graph.ts`, non-breaking.
+- [x] **G1** — `buildWorkflowGraphWithNodeRefs`: additive graph-to-AST-location mapping in `src/graph.ts`, non-breaking.
 - [ ] **G2** — Instrumented sibling copy with unmodified text, unique concurrency-safe filenames, written next to the original file (relative-import landmine).
 - [ ] **G3** — Real instrumentation: if/else branches, per-function trace-array state, namespaced Query — verified at the text/AST level only.
 - [ ] **G4** — First real end-to-end proof: trivial if/else + zero-branch fixture run through `TestWorkflowEnvironment` + `Worker`, queried, trace asserted. First milestone with a live Temporal dependency and test-server binary download (CI caching added here).

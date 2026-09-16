@@ -55,6 +55,28 @@ interface OpenEdge {
  * statements.
  */
 export function buildWorkflowGraph(fn: WorkflowFunctionNode, functionName: string): WorkflowGraph {
+  return buildWorkflowGraphWithNodeRefs(fn, functionName).graph;
+}
+
+/**
+ * Same as {@link buildWorkflowGraph}, but also returns a map from each
+ * decision node's id to the exact `ts-morph` AST node used to create it (an
+ * `IfStatement`/`TryStatement`/`WhileStatement`/`ForStatement` for if/else,
+ * try/catch, and loop decisions, or the matched `CallExpression` itself for
+ * `Promise.race`/`condition()` decisions — the precise node Gap 2's
+ * instrumentation needs to rewrite). `start`/`end` nodes have no entry.
+ *
+ * The returned `Node` references are only valid against the exact
+ * `ts-morph` source `fn` was parsed from — they must never be reused after
+ * that source has been mutated, or against a different parse of "the same"
+ * file. Callers that need to instrument a copy of a workflow file must call
+ * this function fresh against the copy's own parse, before inserting any
+ * text into it (see LIMITATIONS.md).
+ */
+export function buildWorkflowGraphWithNodeRefs(
+  fn: WorkflowFunctionNode,
+  functionName: string,
+): { graph: WorkflowGraph; nodeAstRefs: Map<string, Node> } {
   const sourceFile = fn.getSourceFile();
   const activityBindings = collectActivityBindings(sourceFile);
   const sleepNames = collectLocalImportNames(sourceFile, TEMPORAL_WORKFLOW_MODULE, new Set(['sleep']));
@@ -66,7 +88,8 @@ export function buildWorkflowGraph(fn: WorkflowFunctionNode, functionName: strin
   const bodyStatements = getFunctionBodyStatements(fn);
   const finalFrontier = builder.processStatements(bodyStatements, [{ from: startId, label: '' }]);
 
-  return builder.finalize(functionName, startId, finalFrontier);
+  const graph = builder.finalize(functionName, startId, finalFrontier);
+  return { graph, nodeAstRefs: builder.nodeAstRefs };
 }
 
 function getFunctionBodyStatements(fn: WorkflowFunctionNode): Statement[] {
@@ -90,6 +113,7 @@ class GraphBuilder {
   private readonly edges: WorkflowGraphEdge[] = [];
   private readonly terminalEdges: OpenEdge[] = [];
   private nextId = 0;
+  readonly nodeAstRefs = new Map<string, Node>();
 
   constructor(
     private readonly activityBindings: ActivityBindings,
@@ -97,9 +121,12 @@ class GraphBuilder {
     private readonly conditionNames: ReadonlySet<string>,
   ) {}
 
-  createNode(kind: WorkflowGraphNodeKind, label: string): string {
+  createNode(kind: WorkflowGraphNodeKind, label: string, astNode?: Node): string {
     const id = `n${this.nextId++}`;
     this.nodes.push({ id, kind, label });
+    if (astNode !== undefined) {
+      this.nodeAstRefs.set(id, astNode);
+    }
     return id;
   }
 
@@ -156,19 +183,24 @@ class GraphBuilder {
       return [];
     }
 
-    const classification = this.classifyStatement(statement);
-    if (classification === undefined) {
+    const classified = this.classifyStatement(statement);
+    if (classified === undefined) {
       return frontier; // a plain statement with nothing branch-worthy in it
     }
+    const { classification, call } = classified;
     if (classification.kind === 'raceTimeout') {
-      const nodeId = this.createNode('decision', 'Promise.race (timeout)');
+      const nodeId = this.createNode('decision', 'Promise.race (timeout)', call);
       this.connectAllTo(frontier, nodeId);
       return [
         { from: nodeId, label: 'success' },
         { from: nodeId, label: 'timeout' },
       ];
     }
-    const nodeId = this.createNode('decision', classification.hasTimeout ? 'condition() (with timeout)' : 'condition()');
+    const nodeId = this.createNode(
+      'decision',
+      classification.hasTimeout ? 'condition() (with timeout)' : 'condition()',
+      call,
+    );
     this.connectAllTo(frontier, nodeId);
     return classification.hasTimeout
       ? [
@@ -178,23 +210,28 @@ class GraphBuilder {
       : [{ from: nodeId, label: 'signaled' }];
   }
 
-  private classifyStatement(statement: Statement): TimerOrSignalClassification | undefined {
-    let result: TimerOrSignalClassification | undefined;
+  private classifyStatement(
+    statement: Statement,
+  ): { classification: TimerOrSignalClassification; call: Node } | undefined {
+    let result: { classification: TimerOrSignalClassification; call: Node } | undefined;
     statement.forEachDescendant((node, traversal) => {
       if (result !== undefined) {
         traversal.stop();
         return;
       }
       if (Node.isCallExpression(node)) {
-        result = classifyTimerOrSignalCall(node, this.sleepNames, this.conditionNames);
-        if (result !== undefined) traversal.stop();
+        const classification = classifyTimerOrSignalCall(node, this.sleepNames, this.conditionNames);
+        if (classification !== undefined) {
+          result = { classification, call: node };
+          traversal.stop();
+        }
       }
     });
     return result;
   }
 
   private processIf(ifStatement: IfStatement, frontier: OpenEdge[]): OpenEdge[] {
-    const nodeId = this.createNode('decision', `if (${ifStatement.getExpression().getText()})`);
+    const nodeId = this.createNode('decision', `if (${ifStatement.getExpression().getText()})`, ifStatement);
     this.connectAllTo(frontier, nodeId);
 
     const thenExit = this.processStatements(getBlockOrSingleStatement(ifStatement.getThenStatement()), [
@@ -224,7 +261,7 @@ class GraphBuilder {
       return this.processStatements(tryBlock.getStatements(), frontier);
     }
 
-    const nodeId = this.createNode('decision', 'try/catch (activity)');
+    const nodeId = this.createNode('decision', 'try/catch (activity)', tryStatement);
     this.connectAllTo(frontier, nodeId);
 
     const successExit = this.processStatements(tryBlock.getStatements(), [{ from: nodeId, label: 'success' }]);
@@ -249,7 +286,7 @@ class GraphBuilder {
       return this.processStatements(bodyStatements, frontier);
     }
 
-    const nodeId = this.createNode('decision', describeLoop(loopStatement));
+    const nodeId = this.createNode('decision', describeLoop(loopStatement), loopStatement);
     this.connectAllTo(frontier, nodeId);
 
     const bodyExit = this.processStatements(bodyStatements, [{ from: nodeId, label: 'iterate' }]);
