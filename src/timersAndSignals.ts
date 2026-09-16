@@ -16,7 +16,9 @@ export interface SignalWaitBranch {
 
 export type TimerOrSignalBranch = RaceTimeoutBranch | SignalWaitBranch;
 
-const TEMPORAL_WORKFLOW_MODULE = '@temporalio/workflow';
+export type TimerOrSignalClassification = { kind: 'raceTimeout' } | { kind: 'signalWait'; hasTimeout: boolean };
+
+export const TEMPORAL_WORKFLOW_MODULE = '@temporalio/workflow';
 
 /**
  * Detects two Temporal-specific branch shapes, confirmed against real code
@@ -46,14 +48,35 @@ export function detectTimerAndSignalBranches(fn: WorkflowFunctionNode): TimerOrS
   body.forEachDescendant((node) => {
     if (!Node.isCallExpression(node)) return;
 
-    if (isPromiseRaceWithTimer(node, sleepNames)) {
-      branches.push(toRaceTimeoutBranch(node));
-    } else if (isConditionCall(node, conditionNames)) {
-      branches.push(toSignalWaitBranch(node));
-    }
+    const classification = classifyTimerOrSignalCall(node, sleepNames, conditionNames);
+    if (classification === undefined) return;
+
+    branches.push(
+      classification.kind === 'raceTimeout' ? toRaceTimeoutBranch(node) : toSignalWaitBranch(node),
+    );
   });
 
   return branches;
+}
+
+/**
+ * Classifies a single call expression as a race-timeout or signal-wait call,
+ * or neither. Exposed separately from `detectTimerAndSignalBranches` so the
+ * graph builder (M5) can classify one call at a time while walking the
+ * statement tree, without re-deriving this logic.
+ */
+export function classifyTimerOrSignalCall(
+  call: CallExpression,
+  sleepNames: ReadonlySet<string>,
+  conditionNames: ReadonlySet<string>,
+): TimerOrSignalClassification | undefined {
+  if (isPromiseRaceWithTimer(call, sleepNames)) {
+    return { kind: 'raceTimeout' };
+  }
+  if (isConditionCall(call, conditionNames)) {
+    return { kind: 'signalWait', hasTimeout: call.getArguments().length >= 2 };
+  }
+  return undefined;
 }
 
 function isPromiseRaceWithTimer(call: CallExpression, sleepNames: ReadonlySet<string>): boolean {
