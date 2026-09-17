@@ -27,10 +27,29 @@ export interface WorkflowGraph {
   endNodeId: string;
 }
 
-/** An edge whose `to` end isn't decided yet — it will be connected to whatever comes next. */
+/**
+ * An edge whose `to` end isn't decided yet — it will be connected to
+ * whatever comes next. `outcomeKey`, when present, is a stable
+ * `${nodeId}#${originalLabel}` tag set once at creation (e.g. `n2#false`)
+ * that survives unchanged as the object is threaded through
+ * `processStatements`/`processStatement`, even across statements that don't
+ * touch it. It exists because a retry loop's closing step
+ * (`processLoop`'s `addEdge(edge.from, nodeId, 'retry')`) deliberately
+ * overwrites whatever label an open edge arrived with — so a nested
+ * decision's "false"/"success"/"timeout"/etc. continuation can end up
+ * persisted in `graph.edges` labeled `'retry'` instead, if it happens to be
+ * the edge that falls through to the very end of the loop body. Gap 1's own
+ * rendering/path-enumeration is unaffected by this (a single combined
+ * "retry" edge is exactly the semantics `mermaid.ts`/`paths.ts` want), but
+ * Gap 2's instrumentation needs to find "the edge that resulted from this
+ * specific if/try/race/condition outcome" regardless of what label it ended
+ * up with — `outcomeEdgeIndex` (see `buildWorkflowGraphWithNodeRefs`)
+ * resolves exactly that, keyed by `outcomeKey`.
+ */
 interface OpenEdge {
   from: string;
   label: string;
+  outcomeKey?: string;
 }
 
 /**
@@ -76,7 +95,7 @@ export function buildWorkflowGraph(fn: WorkflowFunctionNode, functionName: strin
 export function buildWorkflowGraphWithNodeRefs(
   fn: WorkflowFunctionNode,
   functionName: string,
-): { graph: WorkflowGraph; nodeAstRefs: Map<string, Node> } {
+): { graph: WorkflowGraph; nodeAstRefs: Map<string, Node>; outcomeEdgeIndex: Map<string, number> } {
   const sourceFile = fn.getSourceFile();
   const activityBindings = collectActivityBindings(sourceFile);
   const sleepNames = collectLocalImportNames(sourceFile, TEMPORAL_WORKFLOW_MODULE, new Set(['sleep']));
@@ -89,7 +108,7 @@ export function buildWorkflowGraphWithNodeRefs(
   const finalFrontier = builder.processStatements(bodyStatements, [{ from: startId, label: '' }]);
 
   const graph = builder.finalize(functionName, startId, finalFrontier);
-  return { graph, nodeAstRefs: builder.nodeAstRefs };
+  return { graph, nodeAstRefs: builder.nodeAstRefs, outcomeEdgeIndex: builder.outcomeEdgeIndex };
 }
 
 function getFunctionBodyStatements(fn: WorkflowFunctionNode): Statement[] {
@@ -114,6 +133,7 @@ class GraphBuilder {
   private readonly terminalEdges: OpenEdge[] = [];
   private nextId = 0;
   readonly nodeAstRefs = new Map<string, Node>();
+  readonly outcomeEdgeIndex = new Map<string, number>();
 
   constructor(
     private readonly activityBindings: ActivityBindings,
@@ -130,13 +150,22 @@ class GraphBuilder {
     return id;
   }
 
-  private addEdge(from: string, to: string, label: string): void {
+  /** An open edge representing one of a decision node's own outcomes (e.g. `n2` true), tagged so it can be found later regardless of what label it's eventually persisted with. */
+  private outcomeEdge(nodeId: string, label: string): OpenEdge {
+    return { from: nodeId, label, outcomeKey: `${nodeId}#${label}` };
+  }
+
+  private addEdge(from: string, to: string, label: string, outcomeKey?: string): void {
+    const index = this.edges.length;
     this.edges.push({ from, to, label });
+    if (outcomeKey !== undefined) {
+      this.outcomeEdgeIndex.set(outcomeKey, index);
+    }
   }
 
   private connectAllTo(openEdges: OpenEdge[], to: string): void {
     for (const edge of openEdges) {
-      this.addEdge(edge.from, to, edge.label);
+      this.addEdge(edge.from, to, edge.label, edge.outcomeKey);
     }
   }
 
@@ -147,7 +176,7 @@ class GraphBuilder {
   finalize(functionName: string, startNodeId: string, finalFrontier: OpenEdge[]): WorkflowGraph {
     const endNodeId = this.createNode('end', 'End');
     for (const edge of [...this.terminalEdges, ...finalFrontier]) {
-      this.addEdge(edge.from, endNodeId, edge.label);
+      this.addEdge(edge.from, endNodeId, edge.label, edge.outcomeKey);
     }
     return { functionName, nodes: this.nodes, edges: this.edges, startNodeId, endNodeId };
   }
@@ -191,10 +220,7 @@ class GraphBuilder {
     if (classification.kind === 'raceTimeout') {
       const nodeId = this.createNode('decision', 'Promise.race (timeout)', call);
       this.connectAllTo(frontier, nodeId);
-      return [
-        { from: nodeId, label: 'success' },
-        { from: nodeId, label: 'timeout' },
-      ];
+      return [this.outcomeEdge(nodeId, 'success'), this.outcomeEdge(nodeId, 'timeout')];
     }
     const nodeId = this.createNode(
       'decision',
@@ -203,11 +229,8 @@ class GraphBuilder {
     );
     this.connectAllTo(frontier, nodeId);
     return classification.hasTimeout
-      ? [
-          { from: nodeId, label: 'signaled' },
-          { from: nodeId, label: 'timedOut' },
-        ]
-      : [{ from: nodeId, label: 'signaled' }];
+      ? [this.outcomeEdge(nodeId, 'signaled'), this.outcomeEdge(nodeId, 'timedOut')]
+      : [this.outcomeEdge(nodeId, 'signaled')];
   }
 
   private classifyStatement(
@@ -235,14 +258,14 @@ class GraphBuilder {
     this.connectAllTo(frontier, nodeId);
 
     const thenExit = this.processStatements(getBlockOrSingleStatement(ifStatement.getThenStatement()), [
-      { from: nodeId, label: 'true' },
+      this.outcomeEdge(nodeId, 'true'),
     ]);
 
     const elseStatement = ifStatement.getElseStatement();
     const elseExit =
       elseStatement === undefined
-        ? [{ from: nodeId, label: 'false' }]
-        : this.processStatements(getBlockOrSingleStatement(elseStatement), [{ from: nodeId, label: 'false' }]);
+        ? [this.outcomeEdge(nodeId, 'false')]
+        : this.processStatements(getBlockOrSingleStatement(elseStatement), [this.outcomeEdge(nodeId, 'false')]);
 
     return [...thenExit, ...elseExit];
   }
@@ -264,10 +287,10 @@ class GraphBuilder {
     const nodeId = this.createNode('decision', 'try/catch (activity)', tryStatement);
     this.connectAllTo(frontier, nodeId);
 
-    const successExit = this.processStatements(tryBlock.getStatements(), [{ from: nodeId, label: 'success' }]);
+    const successExit = this.processStatements(tryBlock.getStatements(), [this.outcomeEdge(nodeId, 'success')]);
     // isActivityTryCatch being true guarantees catchClause is defined.
     const failureExit = this.processStatements(catchClause.getBlock().getStatements(), [
-      { from: nodeId, label: 'failure' },
+      this.outcomeEdge(nodeId, 'failure'),
     ]);
 
     return [...successExit, ...failureExit];
@@ -289,16 +312,22 @@ class GraphBuilder {
     const nodeId = this.createNode('decision', describeLoop(loopStatement), loopStatement);
     this.connectAllTo(frontier, nodeId);
 
-    const bodyExit = this.processStatements(bodyStatements, [{ from: nodeId, label: 'iterate' }]);
+    const bodyExit = this.processStatements(bodyStatements, [this.outcomeEdge(nodeId, 'iterate')]);
     for (const edge of bodyExit) {
       // Every path that falls through the loop body normally (i.e. didn't
       // already return/throw) goes back to try again — the labeled back-edge
       // the plan requires, regardless of what the body's own last branch's
-      // edge label was.
-      this.addEdge(edge.from, nodeId, 'retry');
+      // edge label was. `edge.outcomeKey` is still propagated here (not
+      // dropped): if a nested decision's own continuation (e.g. an inner
+      // if's "false" edge) happens to be what falls through to here, this is
+      // the point where that continuation is actually closed into a real
+      // edge — its `outcomeKey` must still resolve to *this* edge's index,
+      // even though the label persisted for it is `'retry'`, not the
+      // nested decision's own outcome label (see the `OpenEdge` doc comment).
+      this.addEdge(edge.from, nodeId, 'retry', edge.outcomeKey);
     }
 
-    return [{ from: nodeId, label: 'exit' }];
+    return [this.outcomeEdge(nodeId, 'exit')];
   }
 }
 

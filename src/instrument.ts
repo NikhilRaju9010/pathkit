@@ -93,6 +93,26 @@ interface TextEdit {
   text: string;
 }
 
+/**
+ * Resolves the `graph.edges` array index for a specific decision node's
+ * outcome (e.g. node `n2`'s `'false'` outcome), via the `outcomeEdgeIndex`
+ * map returned by `buildWorkflowGraphWithNodeRefs` — never by searching
+ * `graph.edges` for a matching `label` directly. A retry loop's closing step
+ * can silently overwrite an outcome's persisted label to `'retry'` (see the
+ * `OpenEdge` doc comment in `graph.ts`), so label-based lookup is unsafe for
+ * any decision that might be nested inside one; `outcomeEdgeIndex` is keyed
+ * by the outcome's *original* identity and stays correct regardless of what
+ * label the edge ends up with.
+ */
+function resolveOutcomeIndex(outcomeEdgeIndex: ReadonlyMap<string, number>, nodeId: string, outcome: string): number {
+  const key = `${nodeId}#${outcome}`;
+  const index = outcomeEdgeIndex.get(key);
+  if (index === undefined) {
+    throw new PathKitError(`Internal error: no persisted edge found for decision node ${nodeId}'s "${outcome}" outcome.`);
+  }
+  return index;
+}
+
 function instrumentText(originalText: string, fn: WorkflowFunctionNode, functionName: string): string {
   const sourceFile = fn.getSourceFile();
   const body = fn.getBody();
@@ -103,14 +123,15 @@ function instrumentText(originalText: string, fn: WorkflowFunctionNode, function
     );
   }
 
-  const { graph, nodeAstRefs } = buildWorkflowGraphWithNodeRefs(fn, functionName);
+  const { graph, nodeAstRefs, outcomeEdgeIndex } = buildWorkflowGraphWithNodeRefs(fn, functionName);
   const traceVarName = `__pathkitTrace__${functionName}`;
   const queryVarName = `__pathkit_coverage__${functionName}`;
 
   const edits: TextEdit[] = [
-    ...ifElseEdits(graph, nodeAstRefs, traceVarName),
-    ...tryCatchEdits(graph, nodeAstRefs, traceVarName),
-    ...raceAndConditionEdits(graph, nodeAstRefs, traceVarName),
+    ...ifElseEdits(graph, nodeAstRefs, outcomeEdgeIndex, traceVarName),
+    ...tryCatchEdits(graph, nodeAstRefs, outcomeEdgeIndex, traceVarName),
+    ...raceAndConditionEdits(graph, nodeAstRefs, outcomeEdgeIndex, traceVarName),
+    ...retryLoopEdits(graph, nodeAstRefs, outcomeEdgeIndex, traceVarName),
     setHandlerEdit(body, traceVarName, queryVarName),
     ...scaffoldEdits(sourceFile, traceVarName, queryVarName, needsRaceHelper(graph)),
   ];
@@ -123,12 +144,16 @@ function instrumentText(originalText: string, fn: WorkflowFunctionNode, function
  * for the "true" edge as the first statement of the `then` arm, and one for
  * the "false" edge as the first statement of the `else` arm — synthesizing
  * an empty `else { ... }` if none exists. The edge index baked into each
- * push call is the literal position of that edge in `graph.edges`, which is
- * stable because a given if-decision node always has exactly one "true" and
- * one "false" edge in `graph.edges`, however deeply anything inside it (or
- * after it) is nested.
+ * push call is resolved via `outcomeEdgeIndex` (see `resolveOutcomeIndex`),
+ * not by searching for a `'true'`/`'false'`-labeled edge directly, since a
+ * retry loop nesting this `if` can overwrite that label with `'retry'`.
  */
-function ifElseEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, traceVarName: string): TextEdit[] {
+function ifElseEdits(
+  graph: WorkflowGraph,
+  nodeAstRefs: Map<string, Node>,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
+  traceVarName: string,
+): TextEdit[] {
   const edits: TextEdit[] = [];
 
   for (const node of graph.nodes) {
@@ -136,16 +161,13 @@ function ifElseEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, trace
     const astNode = nodeAstRefs.get(node.id);
     if (astNode === undefined || !Node.isIfStatement(astNode)) continue; // a different decision kind, not this milestone's concern yet
 
-    const trueEdge = graph.edges.find((e) => e.from === node.id && e.label === 'true');
-    const falseEdge = graph.edges.find((e) => e.from === node.id && e.label === 'false');
-    if (trueEdge === undefined || falseEdge === undefined) {
-      throw new PathKitError(`Internal error: if-decision node ${node.id} is missing a true/false edge.`);
-    }
+    const trueIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'true');
+    const falseIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'false');
 
-    edits.push(armEdit(astNode.getThenStatement(), pushStatement(traceVarName, graph.edges.indexOf(trueEdge))));
+    edits.push(armEdit(astNode.getThenStatement(), pushStatement(traceVarName, trueIdx)));
 
     const elseStatement = astNode.getElseStatement();
-    const falsePush = pushStatement(traceVarName, graph.edges.indexOf(falseEdge));
+    const falsePush = pushStatement(traceVarName, falseIdx);
     if (elseStatement === undefined) {
       const pos = astNode.getThenStatement().getEnd();
       edits.push({ start: pos, end: pos, text: ` else { ${falsePush} }` });
@@ -182,7 +204,12 @@ function armEdit(arm: Node, pushText: string): TextEdit {
  * "success" caveat when the try body branches internally with an early
  * return before its last statement).
  */
-function tryCatchEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, traceVarName: string): TextEdit[] {
+function tryCatchEdits(
+  graph: WorkflowGraph,
+  nodeAstRefs: Map<string, Node>,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
+  traceVarName: string,
+): TextEdit[] {
   const edits: TextEdit[] = [];
 
   for (const node of graph.nodes) {
@@ -190,28 +217,60 @@ function tryCatchEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, tra
     const astNode = nodeAstRefs.get(node.id);
     if (astNode === undefined || !Node.isTryStatement(astNode)) continue; // a different decision kind
 
-    const successEdge = graph.edges.find((e) => e.from === node.id && e.label === 'success');
-    const failureEdge = graph.edges.find((e) => e.from === node.id && e.label === 'failure');
     const catchClause = astNode.getCatchClause();
-    if (successEdge === undefined || failureEdge === undefined || catchClause === undefined) {
-      throw new PathKitError(`Internal error: try/catch decision node ${node.id} is missing a success/failure edge or catch clause.`);
+    if (catchClause === undefined) {
+      throw new PathKitError(`Internal error: try/catch decision node ${node.id} has no catch clause.`);
     }
+    const successIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'success');
+    const failureIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'failure');
 
     const tryBlock = astNode.getTryBlock();
     const successPos = tryBlock.getEnd() - 1; // right before the try block's closing `}`
-    edits.push({
-      start: successPos,
-      end: successPos,
-      text: `${pushStatement(traceVarName, graph.edges.indexOf(successEdge))} `,
-    });
+    edits.push({ start: successPos, end: successPos, text: `${pushStatement(traceVarName, successIdx)} ` });
 
     const catchBlock = catchClause.getBlock();
     const failurePos = catchBlock.getStart() + 1; // right after the catch block's opening `{`
-    edits.push({
-      start: failurePos,
-      end: failurePos,
-      text: ` ${pushStatement(traceVarName, graph.edges.indexOf(failureEdge))}`,
-    });
+    edits.push({ start: failurePos, end: failurePos, text: ` ${pushStatement(traceVarName, failureIdx)}` });
+  }
+
+  return edits;
+}
+
+/**
+ * One edit pair per retry-loop decision node: a `push()` for the "iterate"
+ * edge as the first statement of the loop body, and a `push()` for the
+ * "exit" edge immediately after the whole loop statement. Deliberately no
+ * separate push for the "retry" back-edge itself — a second (or third, ...)
+ * pass through the loop body re-executes the same "iterate" push, so a
+ * multi-iteration run's raw trace naturally contains the repeated pattern
+ * (`['<iterateIdx>', '<iterateIdx>', ..., '<exitIdx or something else>']`)
+ * without any extra instrumentation. This is by design, not an oversight —
+ * it's exactly the "a retry happened" signal `enumeratePaths` already
+ * collapses a loop's back-edge into (see LIMITATIONS.md and G8, which
+ * defines how a raw multi-iteration trace gets normalized back down to a
+ * single declared path).
+ */
+function retryLoopEdits(
+  graph: WorkflowGraph,
+  nodeAstRefs: Map<string, Node>,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
+  traceVarName: string,
+): TextEdit[] {
+  const edits: TextEdit[] = [];
+
+  for (const node of graph.nodes) {
+    if (node.kind !== 'decision') continue;
+    const astNode = nodeAstRefs.get(node.id);
+    if (astNode === undefined || !(Node.isWhileStatement(astNode) || Node.isForStatement(astNode))) continue; // a different decision kind
+
+    const iterateIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'iterate');
+    const exitIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'exit');
+
+    const loopBody = astNode.getStatement();
+    edits.push(armEdit(loopBody, pushStatement(traceVarName, iterateIdx)));
+
+    const exitPos = astNode.getEnd();
+    edits.push({ start: exitPos, end: exitPos, text: ` ${pushStatement(traceVarName, exitIdx)}` });
   }
 
   return edits;
@@ -235,7 +294,12 @@ function needsRaceHelper(graph: WorkflowGraph): boolean {
  * "any if/while condition" wording, and are grounded in what graph.ts can
  * actually produce, not just what Gap 1 can detect (see LIMITATIONS.md).
  */
-function raceAndConditionEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, traceVarName: string): TextEdit[] {
+function raceAndConditionEdits(
+  graph: WorkflowGraph,
+  nodeAstRefs: Map<string, Node>,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
+  traceVarName: string,
+): TextEdit[] {
   const edits: TextEdit[] = [];
 
   for (const node of graph.nodes) {
@@ -249,9 +313,9 @@ function raceAndConditionEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, No
     }
 
     if (node.label === 'Promise.race (timeout)') {
-      edits.push(raceEdit(node, graph, astNode, statement, traceVarName));
+      edits.push(raceEdit(node, outcomeEdgeIndex, astNode, statement, traceVarName));
     } else {
-      edits.push(...conditionEdit(node, graph, astNode, statement, traceVarName));
+      edits.push(...conditionEdit(node, outcomeEdgeIndex, astNode, statement, traceVarName));
     }
   }
 
@@ -267,26 +331,21 @@ function raceAndConditionEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, No
  */
 function raceEdit(
   node: WorkflowGraphNode,
-  graph: WorkflowGraph,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
   call: CallExpression,
   statement: Statement,
   traceVarName: string,
 ): TextEdit {
   assertBareDiscardedStatement(statement, call, 'Promise.race');
 
-  const successEdge = graph.edges.find((e) => e.from === node.id && e.label === 'success');
-  const timeoutEdge = graph.edges.find((e) => e.from === node.id && e.label === 'timeout');
-  if (successEdge === undefined || timeoutEdge === undefined) {
-    throw new PathKitError(`Internal error: Promise.race decision node ${node.id} is missing a success/timeout edge.`);
-  }
+  const successIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'success');
+  const timeoutIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'timeout');
 
   const raceArgs = call.getArguments()[0];
   if (raceArgs === undefined) {
     throw new PathKitError(`Internal error: Promise.race call at decision node ${node.id} has no array argument.`);
   }
 
-  const successIdx = graph.edges.indexOf(successEdge);
-  const timeoutIdx = graph.edges.indexOf(timeoutEdge);
   const replacement =
     `${traceVarName}.push(await ${PATHKIT_RACE_HELPER_NAME}(${raceArgs.getText()}, ` +
     `['${successIdx}', '${timeoutIdx}']));`;
@@ -307,7 +366,7 @@ function raceEdit(
  */
 function conditionEdit(
   node: WorkflowGraphNode,
-  graph: WorkflowGraph,
+  outcomeEdgeIndex: ReadonlyMap<string, number>,
   call: CallExpression,
   statement: Statement,
   traceVarName: string,
@@ -316,18 +375,12 @@ function conditionEdit(
   const pos = statement.getEnd();
 
   if (!hasTimeout) {
-    const signaledEdge = graph.edges.find((e) => e.from === node.id && e.label === 'signaled');
-    if (signaledEdge === undefined) {
-      throw new PathKitError(`Internal error: condition() decision node ${node.id} is missing a signaled edge.`);
-    }
-    return [{ start: pos, end: pos, text: ` ${pushStatement(traceVarName, graph.edges.indexOf(signaledEdge))}` }];
+    const signaledIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'signaled');
+    return [{ start: pos, end: pos, text: ` ${pushStatement(traceVarName, signaledIdx)}` }];
   }
 
-  const signaledEdge = graph.edges.find((e) => e.from === node.id && e.label === 'signaled');
-  const timedOutEdge = graph.edges.find((e) => e.from === node.id && e.label === 'timedOut');
-  if (signaledEdge === undefined || timedOutEdge === undefined) {
-    throw new PathKitError(`Internal error: condition() (with timeout) decision node ${node.id} is missing a signaled/timedOut edge.`);
-  }
+  const signaledIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'signaled');
+  const timedOutIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'timedOut');
 
   if (!Node.isVariableStatement(statement)) {
     throw new PathKitError(
@@ -355,8 +408,8 @@ function conditionEdit(
   }
 
   const varName = declaration.getName();
-  const signaledPush = pushStatement(traceVarName, graph.edges.indexOf(signaledEdge));
-  const timedOutPush = pushStatement(traceVarName, graph.edges.indexOf(timedOutEdge));
+  const signaledPush = pushStatement(traceVarName, signaledIdx);
+  const timedOutPush = pushStatement(traceVarName, timedOutIdx);
   return [{ start: pos, end: pos, text: ` if (${varName}) { ${signaledPush} } else { ${timedOutPush} }` }];
 }
 

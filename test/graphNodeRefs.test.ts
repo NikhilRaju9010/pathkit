@@ -58,4 +58,52 @@ describe('buildWorkflowGraphWithNodeRefs — G1 (Gap 2)', () => {
     const { graph: withRefs } = buildWorkflowGraphWithNodeRefs(fn.node, fn.name);
     expect(plain).toEqual(withRefs);
   });
+
+  describe('outcomeEdgeIndex (added while fixing a G7 regression)', () => {
+    it('resolves a flat if-decision\'s true/false outcomes to the edges actually labeled true/false', () => {
+      const { graph, outcomeEdgeIndex } = nodeRefsOf('m2', 'simple-if-else.ts', 'simpleIfElse');
+      const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
+
+      const trueIdx = outcomeEdgeIndex.get(`${decisionId}#true`);
+      const falseIdx = outcomeEdgeIndex.get(`${decisionId}#false`);
+      expect(trueIdx).toBeDefined();
+      expect(falseIdx).toBeDefined();
+      expect(graph.edges[trueIdx!]).toEqual({ from: decisionId, to: expect.any(String), label: 'true' });
+      expect(graph.edges[falseIdx!]).toEqual({ from: decisionId, to: expect.any(String), label: 'false' });
+    });
+
+    it("resolves an if's false outcome correctly even when a retry loop overwrites its persisted edge label to 'retry'", () => {
+      // test/fixtures/m5/retry-loop.ts: an if with no else, whose only
+      // statement is an early `return`, falls through (on the false path)
+      // straight to the end of the retry loop's body — graph.ts's own retry
+      // back-edge closing overwrites that edge's label from 'false' to
+      // 'retry' (see graph.ts's OpenEdge doc comment), which is exactly the
+      // scenario outcomeEdgeIndex exists to resolve correctly regardless.
+      const { graph, nodeAstRefs, outcomeEdgeIndex } = nodeRefsOf('m5', 'retry-loop.ts', 'retryLoopWorkflow');
+      const ifNode = graph.nodes.find((n) => n.label.startsWith('if ('))!;
+      expect(nodeAstRefs.get(ifNode.id)).toBeDefined();
+
+      const falseIdx = outcomeEdgeIndex.get(`${ifNode.id}#false`);
+      expect(falseIdx).toBeDefined();
+
+      const resolvedEdge = graph.edges[falseIdx!]!;
+      expect(resolvedEdge.from).toBe(ifNode.id);
+      // The whole point: this edge's *persisted* label is 'retry', not
+      // 'false' — a naive `graph.edges.find(e => e.label === 'false')`
+      // lookup would find nothing for this if-node at all.
+      expect(resolvedEdge.label).toBe('retry');
+    });
+
+    it('resolves a retry loop\'s own iterate/exit outcomes correctly', () => {
+      const { graph, outcomeEdgeIndex } = nodeRefsOf('m5', 'retry-loop.ts', 'retryLoopWorkflow');
+      const loopNode = graph.nodes.find((n) => n.label.startsWith('for ('))!;
+
+      const iterateIdx = outcomeEdgeIndex.get(`${loopNode.id}#iterate`);
+      const exitIdx = outcomeEdgeIndex.get(`${loopNode.id}#exit`);
+      expect(iterateIdx).toBeDefined();
+      expect(exitIdx).toBeDefined();
+      expect(graph.edges[iterateIdx!]!.from).toBe(loopNode.id);
+      expect(graph.edges[exitIdx!]!.from).toBe(loopNode.id);
+    });
+  });
 });

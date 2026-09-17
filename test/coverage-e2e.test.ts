@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { WorkflowHandle } from '@temporalio/client';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
-import { buildWorkflowGraph } from '../src/graph';
+import { buildWorkflowGraph, buildWorkflowGraphWithNodeRefs } from '../src/graph';
 import { removeInstrumentedCopy, writeInstrumentedCopy } from '../src/instrument';
 import { parseWorkflowFile } from '../src/parser';
 
@@ -243,6 +243,61 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
         expect(trace).toEqual([
           edgeIndexOf('condition-signal.ts', 'conditionTimeoutWorkflow', 'condition() (with timeout)', 'timedOut'),
         ]);
+      },
+      30_000,
+    );
+  });
+
+  describe('G7: retry loops', () => {
+    function outcomeIdx(decisionLabelPrefix: string, outcome: string): string {
+      const filePath = path.join(__dirname, 'fixtures', 'g7', 'retry-loop.ts');
+      const fn = parseWorkflowFile(filePath).find((f) => f.name === 'retryLoopWorkflow')!;
+      const { graph, outcomeEdgeIndex } = buildWorkflowGraphWithNodeRefs(fn.node, 'retryLoopWorkflow');
+      const decisionId = graph.nodes.find((n) => n.label.startsWith(decisionLabelPrefix))!.id;
+      const idx = outcomeEdgeIndex.get(`${decisionId}#${outcome}`);
+      if (idx === undefined) throw new Error(`no outcome edge for ${decisionId}#${outcome}`);
+      return String(idx);
+    }
+
+    it(
+      'a mocked activity that fails twice then succeeds produces a raw trace with the repeated iterate/false pattern',
+      async () => {
+        let calls = 0;
+        const trace = await runAndQueryTrace('g7', 'retry-loop.ts', 'retryLoopWorkflow', [5], {
+          checkJobStatus: async () => {
+            calls += 1;
+            return calls < 3 ? 'pending' : 'complete';
+          },
+        });
+
+        const iterateIdx = outcomeIdx('for (', 'iterate');
+        const ifFalseIdx = outcomeIdx('if (', 'false');
+        const ifTrueIdx = outcomeIdx('if (', 'true');
+
+        expect(trace).toEqual([
+          iterateIdx,
+          ifFalseIdx,
+          iterateIdx,
+          ifFalseIdx,
+          iterateIdx,
+          ifTrueIdx,
+        ]);
+      },
+      30_000,
+    );
+
+    it(
+      'a mocked activity that never succeeds within maxAttempts produces a trace ending in the loop exit edge',
+      async () => {
+        const trace = await runAndQueryTrace('g7', 'retry-loop.ts', 'retryLoopWorkflow', [2], {
+          checkJobStatus: async () => 'pending',
+        });
+
+        const iterateIdx = outcomeIdx('for (', 'iterate');
+        const ifFalseIdx = outcomeIdx('if (', 'false');
+        const exitIdx = outcomeIdx('for (', 'exit');
+
+        expect(trace).toEqual([iterateIdx, ifFalseIdx, iterateIdx, ifFalseIdx, exitIdx]);
       },
       30_000,
     );

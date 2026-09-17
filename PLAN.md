@@ -34,7 +34,7 @@ Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, 
 - [x] **G4** — First real end-to-end proof: trivial if/else + zero-branch fixture run through `TestWorkflowEnvironment` + `Worker`, queried, trace asserted. First milestone with a live Temporal dependency and test-server binary download (CI caching added here).
 - [x] **G5** — Extend real instrumentation to try/catch-around-activity.
 - [x] **G6** — Extend real instrumentation to `Promise.race` timeouts and `condition()`; includes a race-neutrality test proving tracking never changes which side wins.
-- [ ] **G7** — Extend real instrumentation to retry loops (iterate/retry/exit edges).
+- [x] **G7** — Extend real instrumentation to retry loops (iterate/retry/exit edges). Also fixed a structural `graph.ts` issue (an `outcomeEdgeIndex` map) affecting every prior milestone's instrumentation when nested inside a retry loop — see CLAUDE.md.
 - [ ] **G7b** — Combined/nested construct proof: if/else nested inside a retry loop, matching `demo/report-polling-workflow.ts`'s real shape.
 - [ ] **G8** — Trace file format (with `sourceHash`) + offline merge/matching logic, including multi-loop collapsing, zero-branch, and `maxPaths`-truncation fixtures.
 - [ ] **G9** — `pathkit coverage` CLI command (text/`--json` output, `--out`, `--clean`, `--allow-stale`). Version bump (new CLI-facing behavior).
