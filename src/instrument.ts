@@ -1,13 +1,30 @@
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import { Node, SourceFile } from 'ts-morph';
+import { CallExpression, Node, SourceFile, Statement } from 'ts-morph';
 import { PathKitError } from './errors';
-import { buildWorkflowGraphWithNodeRefs, WorkflowGraph } from './graph';
+import { buildWorkflowGraphWithNodeRefs, WorkflowGraph, WorkflowGraphNode } from './graph';
 import { parseWorkflowFile, WorkflowFunctionNode } from './parser';
 
 const INSTRUMENTED_SUFFIX = 'pathkit-instrumented.ts';
 const TEMPORAL_WORKFLOW_MODULE = '@temporalio/workflow';
+
+/**
+ * A minimal, purely-observational `Promise.race` wrapper injected into an
+ * instrumented file only when it actually contains a `Promise.race`
+ * decision node. It resolves with whichever `labels[i]` corresponds to the
+ * first input promise to settle — it never inspects or exposes the winning
+ * promise's own resolved value, since the only supported usage (see
+ * `raceEdit`) always discards that value anyway. Racing the same promises
+ * wrapped in an extra `.then()` settles at the same "tick" as the original
+ * promise, so it never changes which side of the race actually wins —
+ * verified directly in `test/instrumentRaceHelper.test.ts`.
+ */
+const PATHKIT_RACE_HELPER_NAME = '__pathkitRace';
+const PATHKIT_RACE_HELPER_SOURCE = `function ${PATHKIT_RACE_HELPER_NAME}(promises, labels) {
+  return Promise.race(promises.map((p, i) => p.then(() => labels[i])));
+}
+`;
 
 /**
  * Writes an instrumented copy of a workflow file as a sibling of the
@@ -93,8 +110,9 @@ function instrumentText(originalText: string, fn: WorkflowFunctionNode, function
   const edits: TextEdit[] = [
     ...ifElseEdits(graph, nodeAstRefs, traceVarName),
     ...tryCatchEdits(graph, nodeAstRefs, traceVarName),
+    ...raceAndConditionEdits(graph, nodeAstRefs, traceVarName),
     setHandlerEdit(body, traceVarName, queryVarName),
-    ...scaffoldEdits(sourceFile, traceVarName, queryVarName),
+    ...scaffoldEdits(sourceFile, traceVarName, queryVarName, needsRaceHelper(graph)),
   ];
 
   return applyEdits(originalText, edits);
@@ -199,6 +217,168 @@ function tryCatchEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, tra
   return edits;
 }
 
+function needsRaceHelper(graph: WorkflowGraph): boolean {
+  return graph.nodes.some((n) => n.label === 'Promise.race (timeout)');
+}
+
+/**
+ * One edit per `Promise.race`/`condition()` decision node. Because graph.ts
+ * dispatches `if`/`try`/`while`/`for` statements to their own handlers
+ * *before* ever checking a statement for a race/condition call (see
+ * `graph.ts`'s `processStatement`), a call embedded in one of those
+ * constructs' own test expression never becomes a `Promise.race`/`condition()`
+ * decision node in the first place — it's absorbed into an ordinary `if`
+ * decision (already handled by `ifElseEdits`) or a transparent loop. The
+ * only statement shapes that can actually reach this function are "plain"
+ * ones (an expression statement or a variable declaration) — so the
+ * supported shapes below are deliberately narrower than the plan's original
+ * "any if/while condition" wording, and are grounded in what graph.ts can
+ * actually produce, not just what Gap 1 can detect (see LIMITATIONS.md).
+ */
+function raceAndConditionEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, traceVarName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+
+  for (const node of graph.nodes) {
+    if (node.kind !== 'decision') continue;
+    const astNode = nodeAstRefs.get(node.id);
+    if (astNode === undefined || !Node.isCallExpression(astNode)) continue; // if/try/loop, handled elsewhere
+
+    const statement = astNode.getFirstAncestor((a): a is Statement => Node.isStatement(a));
+    if (statement === undefined) {
+      throw new PathKitError(`Internal error: could not find the enclosing statement for decision node ${node.id}.`);
+    }
+
+    if (node.label === 'Promise.race (timeout)') {
+      edits.push(raceEdit(node, graph, astNode, statement, traceVarName));
+    } else {
+      edits.push(...conditionEdit(node, graph, astNode, statement, traceVarName));
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Supported shape: a bare, value-discarding statement — `await Promise.race([...]);`
+ * with nothing else consuming the result. Rewrites the whole statement into
+ * a single push of the winning label, via the `__pathkitRace` helper. Any
+ * other usage (assigned, returned, or embedded in a larger expression) fails
+ * loudly rather than guessing how to preserve the discarded winning value.
+ */
+function raceEdit(
+  node: WorkflowGraphNode,
+  graph: WorkflowGraph,
+  call: CallExpression,
+  statement: Statement,
+  traceVarName: string,
+): TextEdit {
+  assertBareDiscardedStatement(statement, call, 'Promise.race');
+
+  const successEdge = graph.edges.find((e) => e.from === node.id && e.label === 'success');
+  const timeoutEdge = graph.edges.find((e) => e.from === node.id && e.label === 'timeout');
+  if (successEdge === undefined || timeoutEdge === undefined) {
+    throw new PathKitError(`Internal error: Promise.race decision node ${node.id} is missing a success/timeout edge.`);
+  }
+
+  const raceArgs = call.getArguments()[0];
+  if (raceArgs === undefined) {
+    throw new PathKitError(`Internal error: Promise.race call at decision node ${node.id} has no array argument.`);
+  }
+
+  const successIdx = graph.edges.indexOf(successEdge);
+  const timeoutIdx = graph.edges.indexOf(timeoutEdge);
+  const replacement =
+    `${traceVarName}.push(await ${PATHKIT_RACE_HELPER_NAME}(${raceArgs.getText()}, ` +
+    `['${successIdx}', '${timeoutIdx}']));`;
+
+  return { start: statement.getStart(), end: statement.getEnd(), text: replacement };
+}
+
+/**
+ * `condition(fn)` (no timeout) has exactly one possible outcome — it blocks
+ * until signaled, so any statement shape is fine; the push is simply
+ * inserted right after, with no need to inspect a value at all.
+ *
+ * `condition(fn, timeout)` (with timeout) has two outcomes that can only be
+ * told apart by its boolean return value, so the supported shape is
+ * narrower: it must be captured into its own variable declaration
+ * (`const x = await condition(fn, timeout);`), and the push branches on that
+ * variable's name right after the declaration.
+ */
+function conditionEdit(
+  node: WorkflowGraphNode,
+  graph: WorkflowGraph,
+  call: CallExpression,
+  statement: Statement,
+  traceVarName: string,
+): TextEdit[] {
+  const hasTimeout = node.label === 'condition() (with timeout)';
+  const pos = statement.getEnd();
+
+  if (!hasTimeout) {
+    const signaledEdge = graph.edges.find((e) => e.from === node.id && e.label === 'signaled');
+    if (signaledEdge === undefined) {
+      throw new PathKitError(`Internal error: condition() decision node ${node.id} is missing a signaled edge.`);
+    }
+    return [{ start: pos, end: pos, text: ` ${pushStatement(traceVarName, graph.edges.indexOf(signaledEdge))}` }];
+  }
+
+  const signaledEdge = graph.edges.find((e) => e.from === node.id && e.label === 'signaled');
+  const timedOutEdge = graph.edges.find((e) => e.from === node.id && e.label === 'timedOut');
+  if (signaledEdge === undefined || timedOutEdge === undefined) {
+    throw new PathKitError(`Internal error: condition() (with timeout) decision node ${node.id} is missing a signaled/timedOut edge.`);
+  }
+
+  if (!Node.isVariableStatement(statement)) {
+    throw new PathKitError(
+      `Cannot instrument this condition() (with timeout) usage: it must be captured into its own variable ` +
+        `declaration (e.g. "const x = await condition(fn, timeout);") — see LIMITATIONS.md.`,
+    );
+  }
+  const declarations = statement.getDeclarationList().getDeclarations();
+  const declaration = declarations.length === 1 ? declarations[0] : undefined;
+  if (declaration === undefined) {
+    throw new PathKitError(
+      `Cannot instrument this condition() (with timeout) usage: expected exactly one variable declaration, ` +
+        `found ${declarations.length} — see LIMITATIONS.md.`,
+    );
+  }
+  let initializer = declaration.getInitializer();
+  if (initializer !== undefined && Node.isAwaitExpression(initializer)) {
+    initializer = initializer.getExpression();
+  }
+  if (initializer !== call) {
+    throw new PathKitError(
+      `Cannot instrument this condition() (with timeout) usage: the declared variable must be initialized ` +
+        `directly from the condition() call — see LIMITATIONS.md.`,
+    );
+  }
+
+  const varName = declaration.getName();
+  const signaledPush = pushStatement(traceVarName, graph.edges.indexOf(signaledEdge));
+  const timedOutPush = pushStatement(traceVarName, graph.edges.indexOf(timedOutEdge));
+  return [{ start: pos, end: pos, text: ` if (${varName}) { ${signaledPush} } else { ${timedOutPush} }` }];
+}
+
+function assertBareDiscardedStatement(statement: Statement, call: Node, kindLabel: string): void {
+  if (!Node.isExpressionStatement(statement)) {
+    throw new PathKitError(
+      `Cannot instrument this ${kindLabel} usage: only a bare, value-discarding statement ` +
+        `(e.g. "await ${kindLabel}(...);") is supported yet — see LIMITATIONS.md.`,
+    );
+  }
+  let expr: Node = statement.getExpression();
+  if (Node.isAwaitExpression(expr)) {
+    expr = expr.getExpression();
+  }
+  if (expr !== call) {
+    throw new PathKitError(
+      `Cannot instrument this ${kindLabel} usage: its result must be discarded directly ` +
+        `(e.g. "await ${kindLabel}(...);"), not combined with other code — see LIMITATIONS.md.`,
+    );
+  }
+}
+
 function pushStatement(traceVarName: string, edgeIndex: number): string {
   return `${traceVarName}.push('${edgeIndex}');`;
 }
@@ -216,11 +396,13 @@ function setHandlerEdit(body: Node, traceVarName: string, queryVarName: string):
  * definition, inserted right after the last import (or at the top of the
  * file if there are none).
  */
-function scaffoldEdits(sourceFile: SourceFile, traceVarName: string, queryVarName: string): TextEdit[] {
+function scaffoldEdits(sourceFile: SourceFile, traceVarName: string, queryVarName: string, includeRaceHelper: boolean): TextEdit[] {
   const edits: TextEdit[] = [];
   const neededNamedImports = ['defineQuery', 'setHandler'];
   const moduleScaffoldText =
-    `\nconst ${traceVarName}: string[] = [];\n` + `const ${queryVarName} = defineQuery<string[]>('${queryVarName}');\n`;
+    `\nconst ${traceVarName}: string[] = [];\n` +
+    `const ${queryVarName} = defineQuery<string[]>('${queryVarName}');\n` +
+    (includeRaceHelper ? PATHKIT_RACE_HELPER_SOURCE : '');
 
   const existingImport = sourceFile
     .getImportDeclarations()

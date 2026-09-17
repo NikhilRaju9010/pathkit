@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
+import { WorkflowHandle } from '@temporalio/client';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { buildWorkflowGraph } from '../src/graph';
@@ -35,6 +36,7 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
     functionName: string,
     args: unknown[],
     activities?: Record<string, () => Promise<string>>,
+    onStarted?: (handle: WorkflowHandle) => Promise<void>,
   ): Promise<unknown> {
     const filePath = path.join(__dirname, 'fixtures', milestone, fixtureFile);
     const instrumentedPath = writeInstrumentedCopy(filePath, functionName);
@@ -58,6 +60,9 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
       // (queries are answered by a Worker replaying/holding the workflow's
       // sandboxed state, not read directly off server-stored history).
       return await worker.runUntil(async () => {
+        if (onStarted !== undefined) {
+          await onStarted(handle);
+        }
         await handle.result();
         return handle.query(`__pathkit_coverage__${functionName}`);
       });
@@ -134,6 +139,90 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
           },
         });
         expect(trace).toEqual([expectedEdgeIndex('failure')]);
+      },
+      30_000,
+    );
+  });
+
+  describe('G6: Promise.race timeouts and condition() signal-waits', () => {
+    function edgeIndexOf(fixtureFile: string, functionName: string, decisionLabel: string, edgeLabel: string): string {
+      const filePath = path.join(__dirname, 'fixtures', 'g6', fixtureFile);
+      const fn = parseWorkflowFile(filePath).find((f) => f.name === functionName)!;
+      const graph = buildWorkflowGraph(fn.node, functionName);
+      const decisionId = graph.nodes.find((n) => n.label === decisionLabel)!.id;
+      return String(graph.edges.findIndex((e) => e.from === decisionId && e.label === edgeLabel));
+    }
+
+    it(
+      'Promise.race: records the success edge when the activity beats the sleep',
+      async () => {
+        const trace = await runAndQueryTrace('g6', 'race-timeout.ts', 'raceWorkflow', [], {
+          checkStatus: async () => 'ok',
+        });
+        expect(trace).toEqual([edgeIndexOf('race-timeout.ts', 'raceWorkflow', 'Promise.race (timeout)', 'success')]);
+      },
+      30_000,
+    );
+
+    it(
+      'Promise.race: records the timeout edge when the sleep beats the (artificially slow) activity',
+      async () => {
+        const trace = await runAndQueryTrace('g6', 'race-timeout.ts', 'raceWorkflow', [], {
+          checkStatus: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            return 'too-late';
+          },
+        });
+        expect(trace).toEqual([edgeIndexOf('race-timeout.ts', 'raceWorkflow', 'Promise.race (timeout)', 'timeout')]);
+      },
+      30_000,
+    );
+
+    it(
+      'condition() (no timeout): records the signaled edge once the signal arrives',
+      async () => {
+        const trace = await runAndQueryTrace(
+          'g6',
+          'condition-signal.ts',
+          'conditionWorkflow',
+          [],
+          undefined,
+          async (handle) => {
+            await handle.signal('approve');
+          },
+        );
+        expect(trace).toEqual([edgeIndexOf('condition-signal.ts', 'conditionWorkflow', 'condition()', 'signaled')]);
+      },
+      30_000,
+    );
+
+    it(
+      'condition() (with timeout): records the signaled edge when the signal arrives before the timeout',
+      async () => {
+        const trace = await runAndQueryTrace(
+          'g6',
+          'condition-signal.ts',
+          'conditionTimeoutWorkflow',
+          [],
+          undefined,
+          async (handle) => {
+            await handle.signal('approve');
+          },
+        );
+        expect(trace).toEqual([
+          edgeIndexOf('condition-signal.ts', 'conditionTimeoutWorkflow', 'condition() (with timeout)', 'signaled'),
+        ]);
+      },
+      30_000,
+    );
+
+    it(
+      'condition() (with timeout): records the timedOut edge when no signal ever arrives',
+      async () => {
+        const trace = await runAndQueryTrace('g6', 'condition-signal.ts', 'conditionTimeoutWorkflow', []);
+        expect(trace).toEqual([
+          edgeIndexOf('condition-signal.ts', 'conditionTimeoutWorkflow', 'condition() (with timeout)', 'timedOut'),
+        ]);
       },
       30_000,
     );
