@@ -46,18 +46,53 @@ interface IndexedEdge {
  * reached, rather than continuing and discarding the excess.
  */
 export function enumeratePaths(graph: WorkflowGraph, maxPaths: number = DEFAULT_MAX_PATHS): PathEnumerationResult {
+  const { paths, truncated } = enumerateIndexedPaths(graph, maxPaths);
+  return { paths: paths.map((indices) => indices.map((i) => graph.edges[i]!.label)), truncated };
+}
+
+/** One declared Start-to-End path, as both its edge labels (same as `WorkflowPath`) and the underlying `graph.edges` indices that produced them. */
+export interface PathWithEdgeIndices {
+  labels: string[];
+  edgeIndices: number[];
+}
+
+export interface PathEnumerationWithEdgeIndicesResult {
+  paths: PathWithEdgeIndices[];
+  truncated: boolean;
+}
+
+/**
+ * Same enumeration as {@link enumeratePaths}, but each path also carries the
+ * `graph.edges` array indices it's made of, not just their labels — needed
+ * by Gap 2's coverage matching (`coverageReport.ts`) to compare a real
+ * execution trace (recorded by edge index, not label text — two different
+ * decision points can share a label like `"true"`) against a declared path
+ * precisely.
+ */
+export function enumeratePathsWithEdgeIndices(
+  graph: WorkflowGraph,
+  maxPaths: number = DEFAULT_MAX_PATHS,
+): PathEnumerationWithEdgeIndicesResult {
+  const { paths, truncated } = enumerateIndexedPaths(graph, maxPaths);
+  return {
+    paths: paths.map((edgeIndices) => ({ edgeIndices, labels: edgeIndices.map((i) => graph.edges[i]!.label) })),
+    truncated,
+  };
+}
+
+function enumerateIndexedPaths(graph: WorkflowGraph, maxPaths: number): { paths: number[][]; truncated: boolean } {
   const edgesByFrom = groupEdgesByFromNode(graph);
 
-  const paths: WorkflowPath[] = [];
+  const paths: number[][] = [];
   let truncated = false;
   const usedEdgeIndices = new Set<number>();
-  const labelsSoFar: string[] = [];
+  const indicesSoFar: number[] = [];
 
   function visit(nodeId: string): void {
     if (truncated) return;
 
     if (nodeId === graph.endNodeId) {
-      paths.push([...labelsSoFar]);
+      paths.push([...indicesSoFar]);
       if (paths.length >= maxPaths) {
         truncated = true;
       }
@@ -69,11 +104,11 @@ export function enumeratePaths(graph: WorkflowGraph, maxPaths: number = DEFAULT_
       if (usedEdgeIndices.has(edge.index)) continue;
 
       usedEdgeIndices.add(edge.index);
-      labelsSoFar.push(edge.label);
+      indicesSoFar.push(edge.index);
 
       visit(edge.to);
 
-      labelsSoFar.pop();
+      indicesSoFar.pop();
       usedEdgeIndices.delete(edge.index);
     }
   }
