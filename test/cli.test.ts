@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { computeSourceHash } from '../src/coverageReport';
 
 const BIN_PATH = path.join(__dirname, '..', 'bin', 'pathkit');
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
@@ -12,14 +13,16 @@ interface CliResult {
   stderr: string;
 }
 
+/**
+ * `execFileSync` only exposes stderr via the thrown error on a non-zero
+ * exit — on success it discards it entirely, which doesn't work for
+ * commands (like `coverage`) that can print warnings to stderr on a
+ * successful (exit 0) run. `spawnSync` captures both streams unconditionally
+ * regardless of exit code.
+ */
 function runCliSubprocess(args: string[]): CliResult {
-  try {
-    const stdout = execFileSync(process.execPath, [BIN_PATH, ...args], { encoding: 'utf8' });
-    return { exitCode: 0, stdout, stderr: '' };
-  } catch (err) {
-    const execErr = err as { status: number | null; stdout: string; stderr: string };
-    return { exitCode: execErr.status ?? 1, stdout: execErr.stdout, stderr: execErr.stderr };
-  }
+  const result = spawnSync(process.execPath, [BIN_PATH, ...args], { encoding: 'utf8' });
+  return { exitCode: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }
 
 describe('bin/pathkit CLI (real subprocess)', () => {
@@ -74,5 +77,116 @@ describe('bin/pathkit CLI (real subprocess)', () => {
     const result = runCliSubprocess([]);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/unknown or missing command/i);
+  });
+});
+
+describe('bin/pathkit coverage (real subprocess)', () => {
+  // Every test here uses its own freshly-created temp directory — never a
+  // path resembling the real project's .pathkit/coverage/ — since --clean
+  // performs a real destructive delete and must never risk a real directory.
+  let tracesDir: string;
+
+  beforeEach(() => {
+    tracesDir = mkdtempSync(path.join(tmpdir(), 'pathkit-coverage-cli-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tracesDir, { recursive: true, force: true });
+  });
+
+  function writeTrace(fileName: string, workflowFilePath: string, functionName: string, rawTrace: string[]): string {
+    const trace = {
+      schemaVersion: 1,
+      workflowFile: workflowFilePath,
+      functionName,
+      sourceHash: computeSourceHash(readFileSync(workflowFilePath, 'utf8')),
+      recordedAt: new Date().toISOString(),
+      rawTrace,
+    };
+    const filePath = path.join(tracesDir, fileName);
+    writeFileSync(filePath, JSON.stringify(trace), 'utf8');
+    return filePath;
+  }
+
+  it('prints a human-readable text report by default', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    writeTrace('trace-1.json', workflowFilePath, 'simpleIfElse', ['1']);
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow function: simpleIfElse');
+    expect(result.stdout).toContain('Total paths: 2');
+    expect(result.stdout).toContain('Covered: 1/2 (50.0%)');
+    expect(result.stdout).toContain('Covered paths:');
+    expect(result.stdout).toContain('Untested paths:');
+  });
+
+  it('prints the serialized CoverageReport when --json is passed', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    writeTrace('trace-1.json', workflowFilePath, 'simpleIfElse', ['1']);
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir, '--json']);
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { functionName: string; coveredCount: number; totalPaths: number };
+    expect(parsed.functionName).toBe('simpleIfElse');
+    expect(parsed.coveredCount).toBe(1);
+    expect(parsed.totalPaths).toBe(2);
+  });
+
+  it('writes the same report content to disk when --out is passed', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    writeTrace('trace-1.json', workflowFilePath, 'simpleIfElse', ['1']);
+    const outPath = path.join(tracesDir, 'report.txt');
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir, '--out', outPath]);
+
+    expect(result.exitCode).toBe(0);
+    const written = readFileSync(outPath, 'utf8');
+    expect(written).toBe(result.stdout);
+    expect(written).toContain('Workflow function: simpleIfElse');
+  });
+
+  it('deletes every trace file in the directory when --clean is passed', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    writeTrace('trace-1.json', workflowFilePath, 'simpleIfElse', ['1']);
+    writeTrace('trace-2.json', workflowFilePath, 'simpleIfElse', ['2']);
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir, '--clean']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Covered: 2/2 (100.0%)'); // report is built before cleaning
+    expect(readdirSync(tracesDir)).toEqual([]);
+    expect(existsSync(tracesDir)).toBe(true); // the directory itself is left in place, only its files are removed
+  });
+
+  it('prints unmatched-trace warnings to stderr even in --json mode, without failing the command', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    writeTrace('trace-1.json', workflowFilePath, 'simpleIfElse', ['999']); // no such declared path
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir, '--json']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/could not be matched/i);
+    const parsed = JSON.parse(result.stdout) as { unmatchedTraces: unknown[] };
+    expect(parsed.unmatchedTraces).toHaveLength(1);
+  });
+
+  it('requires --function when the workflow file has more than one exported function', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm3', 'try-catch-around-activity.ts');
+
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', tracesDir]);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/multiple exported workflow functions/i);
+  });
+
+  it('a missing --traces directory prints a clear error and exits non-zero', () => {
+    const workflowFilePath = path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts');
+    const result = runCliSubprocess(['coverage', workflowFilePath, '--traces', path.join(tracesDir, 'does-not-exist')]);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/could not read traces directory/i);
   });
 });

@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
+import { CoverageReport, mergeCoverageTraces } from './coverageReport';
 import { PathKitError } from './errors';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
@@ -28,8 +29,16 @@ export function runCli(argv: string[], io: CliIO): number {
   if (command === 'analyze') {
     return runAnalyze(rest, io);
   }
+  if (command === 'coverage') {
+    return runCoverage(rest, io);
+  }
 
-  io.stderr('pathkit: unknown or missing command. Supported: --version, analyze <file> [--out <path>]\n');
+  io.stderr(
+    'pathkit: unknown or missing command. Supported:\n' +
+      '  --version\n' +
+      '  analyze <file> [--out <path>]\n' +
+      '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n',
+  );
   return 1;
 }
 
@@ -94,6 +103,152 @@ function parseAnalyzeArgs(args: string[]): { filePath: string | undefined; outPa
   }
 
   return { filePath: positional[0], outPath };
+}
+
+interface CoverageArgs {
+  filePath: string | undefined;
+  tracesDir: string | undefined;
+  functionName: string | undefined;
+  outPath: string | undefined;
+  json: boolean;
+  allowStale: boolean;
+  clean: boolean;
+}
+
+function runCoverage(args: string[], io: CliIO): number {
+  const usage =
+    'Usage: pathkit coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n';
+  const { filePath, tracesDir, functionName: requestedFunctionName, outPath, json, allowStale, clean } =
+    parseCoverageArgs(args);
+
+  if (filePath === undefined) {
+    io.stderr(`pathkit coverage: missing <file> argument. ${usage}`);
+    return 1;
+  }
+  if (tracesDir === undefined) {
+    io.stderr(`pathkit coverage: missing required --traces <dir> argument. ${usage}`);
+    return 1;
+  }
+
+  let functionName: string;
+  try {
+    if (requestedFunctionName !== undefined) {
+      functionName = requestedFunctionName;
+    } else {
+      const functions = parseWorkflowFile(filePath);
+      if (functions.length === 0) {
+        io.stderr(`pathkit coverage: ${filePath} has no exported workflow functions.\n`);
+        return 1;
+      }
+      if (functions.length > 1) {
+        io.stderr(
+          `pathkit coverage: ${filePath} has multiple exported workflow functions ` +
+            `(${functions.map((f) => f.name).join(', ')}); pass --function <name> to pick one.\n`,
+        );
+        return 1;
+      }
+      functionName = functions[0]!.name;
+    }
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit coverage: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+
+  let traceFilePaths: string[];
+  try {
+    traceFilePaths = readdirSync(tracesDir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => join(tracesDir, name));
+  } catch (err) {
+    io.stderr(`pathkit coverage: could not read traces directory ${tracesDir}: ${(err as Error).message}\n`);
+    return 1;
+  }
+
+  let report: CoverageReport;
+  try {
+    report = mergeCoverageTraces(filePath, functionName, traceFilePaths, { allowStale });
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit coverage: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+
+  const output = json ? `${JSON.stringify(report, null, 2)}\n` : formatCoverageReportText(report);
+  io.stdout(output);
+
+  if (outPath !== undefined) {
+    writeFileSync(outPath, output, 'utf8');
+  }
+
+  if (report.unmatchedTraces.length > 0) {
+    io.stderr(
+      `pathkit coverage: ${report.unmatchedTraces.length} trace file(s) could not be matched:\n` +
+        report.unmatchedTraces.map((u) => `  - ${u.traceFilePath}: ${u.reason}\n`).join(''),
+    );
+  }
+
+  if (clean) {
+    for (const traceFilePath of traceFilePaths) {
+      rmSync(traceFilePath, { force: true });
+    }
+  }
+
+  return 0;
+}
+
+function formatCoverageReportText(report: CoverageReport): string {
+  const totalPathsLine = report.truncated
+    ? `Total paths: ${report.totalPaths}+ (truncated at maxPaths=${DEFAULT_MAX_PATHS})`
+    : `Total paths: ${report.totalPaths}`;
+
+  const lines = [
+    `Workflow function: ${report.functionName}`,
+    totalPathsLine,
+    `Covered: ${report.coveredCount}/${report.totalPaths} (${report.percentage.toFixed(1)}%)`,
+    '',
+    'Covered paths:',
+    ...(report.coveredPaths.length > 0 ? report.coveredPaths.map((p) => `  - ${p.description}`) : ['  (none)']),
+    '',
+    'Untested paths:',
+    ...(report.untestedPaths.length > 0 ? report.untestedPaths.map((p) => `  - ${p.description}`) : ['  (none)']),
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+function parseCoverageArgs(args: string[]): CoverageArgs {
+  let tracesDir: string | undefined;
+  let functionName: string | undefined;
+  let outPath: string | undefined;
+  let json = false;
+  let allowStale = false;
+  let clean = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--traces') {
+      tracesDir = args[++i];
+    } else if (arg === '--function') {
+      functionName = args[++i];
+    } else if (arg === '--out') {
+      outPath = args[++i];
+    } else if (arg === '--json') {
+      json = true;
+    } else if (arg === '--allow-stale') {
+      allowStale = true;
+    } else if (arg === '--clean') {
+      clean = true;
+    } else if (arg !== undefined) {
+      positional.push(arg);
+    }
+  }
+
+  return { filePath: positional[0], tracesDir, functionName, outPath, json, allowStale, clean };
 }
 
 function getPackageVersion(): string {

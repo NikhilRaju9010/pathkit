@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then renders the result as a Mermaid diagram.
 
-> **Status:** v0.2.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise, via a new `pathkit coverage` command) is under active development — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
+> **Status:** v0.3.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise) now has a working `pathkit coverage` report command; the developer-facing helper for *recording* traces from your own test suite is still under active development — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
 
 ## Install
 
@@ -77,6 +77,43 @@ flowchart TD
 Paste the fenced ` ```mermaid ` block into the [Mermaid Live Editor](https://mermaid.live) or a GitHub/GitLab markdown file to view the diagram — note the `retry` edge looping back to the polling decision node, representing the loop's retry behavior as a single labeled cycle rather than unrolling every possible iteration count.
 
 More example workflows (order processing, a retry/poll loop, a signal-driven approval flow) are in [`demo/`](./demo).
+
+## Coverage tracking (Gap 2 — in progress)
+
+`pathkit coverage` reports which of a workflow function's statically-declared paths your tests actually exercised, by merging recorded trace files against the same path list `analyze` computes. Coverage tracking still needs a developer-facing helper (coming in a later milestone) to actually *produce* those trace files from your own Temporal test suite — for now, this command is the report-reading half of the feature.
+
+```bash
+npx pathkit coverage <path-to-workflow-file.ts> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]
+```
+
+- `--traces <dir>` (required) — a directory of `*.json` trace files (see the trace schema in `src/coverageReport.ts`'s `CoverageTraceFile`).
+- `--function <name>` — which exported function to report on; only needed if the file exports more than one.
+- Prints a human-readable text report by default: total paths, covered count and percentage, and named lists of covered/untested paths. `--json` prints the full `CoverageReport` structure instead, for scripts/CI.
+- `--out <path>` also writes the exact same report content to disk.
+- `--allow-stale` compares a trace against the workflow's current source even if its recorded `sourceHash` doesn't match (e.g. after a purely cosmetic edit — see [LIMITATIONS.md](./LIMITATIONS.md)).
+- `--clean` deletes every trace file in `--traces <dir>` after printing the report — a deliberate, explicit cleanup step, not automatic.
+- A trace that can't be matched to any declared path (unreadable, wrong schema version, stale, or genuinely unmatched) is reported as a warning on stderr and in the JSON output's `unmatchedTraces` — never silently dropped, and never fails the command.
+
+### Example
+
+Given `demo/order-processing-workflow.ts` and one recorded trace showing its rejection branch was tested:
+
+```bash
+npx pathkit coverage demo/order-processing-workflow.ts --traces .pathkit/coverage/
+```
+
+```
+Workflow function: orderProcessingWorkflow
+Total paths: 3
+Covered: 1/3 (33.3%)
+
+Covered paths:
+  - Start -> if (input.amountCents <= 0) --true--> End
+
+Untested paths:
+  - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --failure--> End
+  - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --success--> End
+```
 
 ## What PathKit detects (v1)
 
