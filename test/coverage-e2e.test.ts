@@ -18,6 +18,26 @@ import { parseWorkflowFile } from '../src/parser';
  * server binary on first use (see CLAUDE.md's G4 decision and
  * LIMITATIONS.md), so this suite is noticeably slower than the rest of the
  * project's pure-static tests and needs generous timeouts.
+ *
+ * STANDING RULE for any new fixture added to this file (not just a G6
+ * artifact — this is unresolved, not fixed): keep every `sleep()`/
+ * `condition(fn, timeout)` duration used in a live e2e test SHORT (a few
+ * hundred milliseconds at most), never a "realistic" one like `'1 hour'` or
+ * `'30 days'`, even though such durations work fine in Gap 1's purely
+ * static tests. A G6 fixture using `'1 hour'` intermittently hung — passing
+ * reliably alone, but hanging when run after several other tests in this
+ * file had already created and torn down their own `Worker`s against this
+ * shared `testEnv` — most likely because the test server's auto-time-skip
+ * lock doesn't always release cleanly across several back-to-back
+ * `Worker.create`/`runUntil` cycles. The actual root cause was never
+ * identified; switching to a short real duration only sidesteps it for that
+ * one fixture; it does not fix the underlying mechanism, and the same hang
+ * can resurface in any later milestone's test (G7's retry-loop tests are a
+ * real risk here) if it reaches for a long duration. If a genuinely long
+ * timeout ever needs testing, give it its own `TestWorkflowEnvironment`
+ * instance in its own `describe` block rather than reusing this file's
+ * shared one, so a hang there can't be blamed on (or triggered by) unrelated
+ * tests, and revisit whether the lock issue reproduces in isolation.
  */
 describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
   let testEnv: TestWorkflowEnvironment;
