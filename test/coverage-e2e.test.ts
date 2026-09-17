@@ -55,7 +55,7 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
     fixtureFile: string,
     functionName: string,
     args: unknown[],
-    activities?: Record<string, () => Promise<string>>,
+    activities?: Record<string, (...args: string[]) => Promise<unknown>>,
     onStarted?: (handle: WorkflowHandle) => Promise<void>,
   ): Promise<unknown> {
     const filePath = path.join(__dirname, 'fixtures', milestone, fixtureFile);
@@ -298,6 +298,85 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
         const exitIdx = outcomeIdx('for (', 'exit');
 
         expect(trace).toEqual([iterateIdx, ifFalseIdx, iterateIdx, ifFalseIdx, exitIdx]);
+      },
+      30_000,
+    );
+  });
+
+  describe('G7b: if/else nested inside a retry loop, real demo/ shape', () => {
+    // Scoped down from a full separate milestone: G7's own text-level test
+    // (test/instrumentRetryLoop.test.ts) already proves this exact two-if
+    // shape instruments correctly against the real
+    // demo/report-polling-workflow.ts fixture, and the composition bug this
+    // was meant to catch (the outcomeEdgeIndex fix) was already found and
+    // fixed during G7 itself. The one gap left — that this real shape also
+    // *executes* correctly through a live Worker, not just re-parses
+    // correctly — is closed here with a single e2e test reusing that same
+    // demo fixture directly, no new fixture file.
+    const demoFilePath = path.resolve(__dirname, '..', 'demo', 'report-polling-workflow.ts');
+
+    function outcomeIdx(decisionLabel: string, outcome: string): string {
+      const fn = parseWorkflowFile(demoFilePath).find((f) => f.name === 'reportPollingWorkflow')!;
+      const { graph, outcomeEdgeIndex } = buildWorkflowGraphWithNodeRefs(fn.node, 'reportPollingWorkflow');
+      const decisionId = graph.nodes.find((n) => n.label === decisionLabel)!.id;
+      const idx = outcomeEdgeIndex.get(`${decisionId}#${outcome}`);
+      if (idx === undefined) throw new Error(`no outcome edge for ${decisionId}#${outcome}`);
+      return String(idx);
+    }
+
+    it(
+      'a real two-if-inside-a-loop workflow produces the correctly interleaved trace across retries, both ifs, and a final early return',
+      async () => {
+        let statusCalls = 0;
+        const instrumentedPath = writeInstrumentedCopy(demoFilePath, 'reportPollingWorkflow');
+        try {
+          const worker = await Worker.create({
+            connection: testEnv.nativeConnection,
+            taskQueue: `g7b-${randomUUID()}`,
+            workflowsPath: instrumentedPath,
+            activities: {
+              startReportJob: async () => undefined,
+              checkReportJobStatus: async () => {
+                statusCalls += 1;
+                return statusCalls < 3 ? 'pending' : 'complete';
+              },
+              downloadReportResult: async () => 'report ready',
+            },
+          });
+
+          const handle = await testEnv.client.workflow.start('reportPollingWorkflow', {
+            workflowId: `g7b-${randomUUID()}`,
+            taskQueue: worker.options.taskQueue,
+            args: [{ reportId: 'r1', maxPollAttempts: 5 }],
+          });
+
+          const trace = await worker.runUntil(async () => {
+            const result = await handle.result();
+            expect(result).toBe('report ready');
+            return handle.query('__pathkit_coverage__reportPollingWorkflow');
+          });
+
+          const loopIterate = outcomeIdx("for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++)", 'iterate');
+          const completeFalse = outcomeIdx("if (status === 'complete')", 'false');
+          const failedFalse = outcomeIdx("if (status === 'failed')", 'false');
+          const completeTrue = outcomeIdx("if (status === 'complete')", 'true');
+
+          // Two "pending" iterations (both ifs false, then retry), then a
+          // third iteration where the status is "complete" (first if true,
+          // early return — the second if is never reached that iteration).
+          expect(trace).toEqual([
+            loopIterate,
+            completeFalse,
+            failedFalse,
+            loopIterate,
+            completeFalse,
+            failedFalse,
+            loopIterate,
+            completeTrue,
+          ]);
+        } finally {
+          removeInstrumentedCopy(instrumentedPath);
+        }
       },
       30_000,
     );
