@@ -92,6 +92,7 @@ function instrumentText(originalText: string, fn: WorkflowFunctionNode, function
 
   const edits: TextEdit[] = [
     ...ifElseEdits(graph, nodeAstRefs, traceVarName),
+    ...tryCatchEdits(graph, nodeAstRefs, traceVarName),
     setHandlerEdit(body, traceVarName, queryVarName),
     ...scaffoldEdits(sourceFile, traceVarName, queryVarName),
   ];
@@ -152,6 +153,50 @@ function armEdit(arm: Node, pushText: string): TextEdit {
     return { start: pos, end: pos, text: ` ${pushText}` };
   }
   return { start: arm.getStart(), end: arm.getEnd(), text: `{ ${pushText} ${arm.getText()} }` };
+}
+
+/**
+ * One edit per try/catch-around-activity decision node: a `push()` for the
+ * "success" edge as the LAST statement of the `try` block (reached only if
+ * nothing in it threw), and a `push()` for the "failure" edge as the FIRST
+ * statement of the `catch` block. Graph.ts only creates this decision node
+ * when a `catchClause` is present (see LIMITATIONS.md for the narrower
+ * "success" caveat when the try body branches internally with an early
+ * return before its last statement).
+ */
+function tryCatchEdits(graph: WorkflowGraph, nodeAstRefs: Map<string, Node>, traceVarName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+
+  for (const node of graph.nodes) {
+    if (node.kind !== 'decision') continue;
+    const astNode = nodeAstRefs.get(node.id);
+    if (astNode === undefined || !Node.isTryStatement(astNode)) continue; // a different decision kind
+
+    const successEdge = graph.edges.find((e) => e.from === node.id && e.label === 'success');
+    const failureEdge = graph.edges.find((e) => e.from === node.id && e.label === 'failure');
+    const catchClause = astNode.getCatchClause();
+    if (successEdge === undefined || failureEdge === undefined || catchClause === undefined) {
+      throw new PathKitError(`Internal error: try/catch decision node ${node.id} is missing a success/failure edge or catch clause.`);
+    }
+
+    const tryBlock = astNode.getTryBlock();
+    const successPos = tryBlock.getEnd() - 1; // right before the try block's closing `}`
+    edits.push({
+      start: successPos,
+      end: successPos,
+      text: `${pushStatement(traceVarName, graph.edges.indexOf(successEdge))} `,
+    });
+
+    const catchBlock = catchClause.getBlock();
+    const failurePos = catchBlock.getStart() + 1; // right after the catch block's opening `{`
+    edits.push({
+      start: failurePos,
+      end: failurePos,
+      text: ` ${pushStatement(traceVarName, graph.edges.indexOf(failureEdge))}`,
+    });
+  }
+
+  return edits;
 }
 
 function pushStatement(traceVarName: string, edgeIndex: number): string {
