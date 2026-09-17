@@ -31,7 +31,7 @@ Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, 
 - [x] **G1** — `buildWorkflowGraphWithNodeRefs`: additive graph-to-AST-location mapping in `src/graph.ts`, non-breaking.
 - [x] **G2** — Instrumented sibling copy with unmodified text, unique concurrency-safe filenames, written next to the original file (relative-import landmine).
 - [x] **G3** — Real instrumentation: if/else branches, per-function trace-array state, namespaced Query — verified at the text/AST level only.
-- [ ] **G4** — First real end-to-end proof: trivial if/else + zero-branch fixture run through `TestWorkflowEnvironment` + `Worker`, queried, trace asserted. First milestone with a live Temporal dependency and test-server binary download (CI caching added here).
+- [x] **G4** — First real end-to-end proof: trivial if/else + zero-branch fixture run through `TestWorkflowEnvironment` + `Worker`, queried, trace asserted. First milestone with a live Temporal dependency and test-server binary download (CI caching added here).
 - [ ] **G5** — Extend real instrumentation to try/catch-around-activity.
 - [ ] **G6** — Extend real instrumentation to `Promise.race` timeouts and `condition()`; includes a race-neutrality test proving tracking never changes which side wins.
 - [ ] **G7** — Extend real instrumentation to retry loops (iterate/retry/exit edges).

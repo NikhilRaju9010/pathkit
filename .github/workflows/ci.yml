@@ -17,6 +17,18 @@ jobs:
 
       - run: npm ci
 
+      # From G4 (Gap 2) onward, the test suite spins up a real Temporal
+      # TestWorkflowEnvironment, which downloads an ~80MB ephemeral
+      # test-server binary to /tmp on first use (not a persistent cache
+      # directory) — cache it explicitly here so CI only pays that download
+      # cost on a cache miss (a new @temporalio/testing version), not every
+      # run. Keyed on package-lock.json since that pins the version.
+      - name: Cache Temporal test-server binary
+        uses: actions/cache@v4
+        with:
+          path: /tmp/temporal-test-server-sdk-typescript-*
+          key: temporal-test-server-${{ hashFiles('package-lock.json') }}
+
       - name: Type check
         run: npm run typecheck
 
