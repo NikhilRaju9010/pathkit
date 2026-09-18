@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { PathKitError } from './errors';
-import { buildWorkflowGraphWithNodeRefs, WorkflowGraph } from './graph';
-import { enumeratePathsWithEdgeIndices } from './paths';
+import { buildWorkflowGraphWithNodeRefs } from './graph';
+import { describePath, enumeratePathsWithEdgeIndices } from './paths';
 import { parseWorkflowFile } from './parser';
 
 /**
@@ -64,6 +64,22 @@ export interface MergeCoverageTracesOptions {
 
 export function computeSourceHash(sourceText: string): string {
   return createHash('sha256').update(sourceText, 'utf8').digest('hex');
+}
+
+/**
+ * Lists every `*.json` file directly inside `tracesDir` as a full path, in
+ * whatever order the filesystem returns them (callers that need a specific
+ * order sort themselves). Shared by `coverage` and Gap 3's `report` command,
+ * since both read the same trace-file convention the same way.
+ */
+export function listTraceFiles(tracesDir: string): string[] {
+  try {
+    return readdirSync(tracesDir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => path.join(tracesDir, name));
+  } catch (err) {
+    throw new PathKitError(`could not read traces directory ${tracesDir}: ${(err as Error).message}`);
+  }
 }
 
 /**
@@ -263,16 +279,4 @@ function collapseRepeatedEdges(rawTrace: readonly string[]): string[] {
 
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
-}
-
-function describePath(graph: WorkflowGraph, edgeIndices: readonly number[]): string {
-  const labelOf = (nodeId: string): string => graph.nodes.find((n) => n.id === nodeId)?.label ?? nodeId;
-
-  let description = labelOf(graph.startNodeId);
-  for (const index of edgeIndices) {
-    const edge = graph.edges[index]!;
-    const arrow = edge.label === '' ? ' -> ' : ` --${edge.label}--> `;
-    description += `${arrow}${labelOf(edge.to)}`;
-  }
-  return description;
 }

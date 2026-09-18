@@ -118,6 +118,25 @@ function enumerateIndexedPaths(graph: WorkflowGraph, maxPaths: number): { paths:
   return { paths, truncated };
 }
 
+/**
+ * Renders one declared path (as returned by {@link enumeratePathsWithEdgeIndices})
+ * as a human-readable `Start -> ... --label--> ... -> End` chain, using each
+ * node's own graph label (e.g. an `if`'s condition text). Shared by Gap 2's
+ * `coverageReport.ts` (per-path descriptions in a `CoverageReport`) and Gap
+ * 3's `report` command, so both ever produce path descriptions the same way.
+ */
+export function describePath(graph: WorkflowGraph, edgeIndices: readonly number[]): string {
+  const labelOf = (nodeId: string): string => graph.nodes.find((n) => n.id === nodeId)?.label ?? nodeId;
+
+  let description = labelOf(graph.startNodeId);
+  for (const index of edgeIndices) {
+    const edge = graph.edges[index]!;
+    const arrow = edge.label === '' ? ' -> ' : ` --${edge.label}--> `;
+    description += `${arrow}${labelOf(edge.to)}`;
+  }
+  return description;
+}
+
 function groupEdgesByFromNode(graph: WorkflowGraph): Map<string, IndexedEdge[]> {
   const edgesByFrom = new Map<string, IndexedEdge[]>();
   graph.edges.forEach((edge, index) => {

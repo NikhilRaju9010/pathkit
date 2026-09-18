@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { parseWorkflowFile } from '../src/parser';
 import { buildWorkflowGraph, WorkflowGraph } from '../src/graph';
-import { enumeratePaths, PathEnumerationResult } from '../src/paths';
+import { describePath, enumeratePaths, enumeratePathsWithEdgeIndices, PathEnumerationResult } from '../src/paths';
 
 function graphOf(milestone: string, fileName: string, functionName: string): WorkflowGraph {
   const filePath = path.join(__dirname, 'fixtures', milestone, fileName);
@@ -123,5 +123,26 @@ describe('enumeratePaths — maxPaths cap (M6)', () => {
     const result = pathsOf('m2', 'simple-if-else.ts', 'simpleIfElse', 10);
     expect(result.truncated).toBe(false);
     expect(result.paths).toHaveLength(2);
+  });
+});
+
+describe('describePath', () => {
+  it('describes a flat if/else path as a human-readable Start -> ... chain', () => {
+    const graph = graphOf('m2', 'simple-if-else.ts', 'simpleIfElse');
+    const { paths } = enumeratePathsWithEdgeIndices(graph);
+    const truePath = paths.find((p) => p.labels.includes('true'));
+    expect(truePath).toBeDefined();
+
+    const description = describePath(graph, truePath!.edgeIndices);
+    expect(description).toBe("Start -> if (isHeads) --true--> End");
+  });
+
+  it('describes a Start-only path (no branches) with no arrows at all', () => {
+    const graph = graphOf('m2', 'no-branches.ts', 'noBranches');
+    const { paths } = enumeratePathsWithEdgeIndices(graph);
+    expect(paths).toHaveLength(1);
+
+    const description = describePath(graph, paths[0]!.edgeIndices);
+    expect(description).toBe('Start -> End');
   });
 });

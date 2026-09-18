@@ -196,6 +196,20 @@ Full verification (`npm run lint && npm run typecheck && npm test && npm run smo
 
 No new dependency this milestone.
 
+## 2026-09-18 — Gap 3 (H1): promoted `describePath`; extracted `listTraceFiles`; confirmed `bin/pathkit`'s isTTY gap ahead of H4
+
+Two small, independently-revertible, behavior-preserving refactors, done one at a time and each verified by the full existing test suite passing **unmodified** before moving to the next — the same verification bar the G8 DFS-sharing refactor set.
+
+**(a) `describePath` moved from `coverageReport.ts` (private) to `paths.ts` (exported), unchanged body.** It builds a human-readable `Start -> ... --label--> ... -> End` chain from a declared path's edge indices, and was only ever used by `mergeCoverageTraces`'s local `toNamedPath` before this milestone. Since Gap 3's `report` command will need to render the exact same kind of per-path description as `coverage` already does, this needed to become a real shared function rather than being reinvented — `coverageReport.ts` now imports it from `./paths` and is otherwise unchanged. New tests in `test/paths.test.ts` cover a flat if/else path (`"Start -> if (isHeads) --true--> End"`) and a Start-only, zero-branch path (`"Start -> End"`), each written and watched fail (missing export) before the move.
+
+**(b) `cli.ts`'s inline trace-directory-listing snippet extracted into `listTraceFiles(tracesDir): string[]` in `coverageReport.ts`.** The original inline code in `runCoverage` caught a raw `readdirSync` error and wrote directly to `io.stderr` — not reusable by a future command. `listTraceFiles` instead throws a `PathKitError` on a read failure (`could not read traces directory ...`), matching every other I/O-adjacent helper in this codebase (`parseWorkflowFile`, `instrument.ts`'s helpers), so both `coverage` and the future `report` command catch it the same uniform way. `runCoverage` now calls it inside the same `try { ... } catch (err) { if (err instanceof PathKitError) ... }` pattern already used everywhere else in `cli.ts`, rather than a one-off inline catch. New `test/listTraceFiles.test.ts` covers listing `*.json` files (ignoring other extensions), an empty directory, and a nonexistent directory throwing `PathKitError` — each written and watched fail first. `test/cli.test.ts`'s existing `pathkit coverage` error-message test (`/could not read traces directory/i`, case-insensitive) passed **unmodified**, confirming the externally-visible error text is unchanged.
+
+**(c) Resolved H1's one open question from planning** by reading `bin/pathkit` directly: it constructs `CliIO` as `{ stdout: (text) => process.stdout.write(text), stderr: (text) => process.stderr.write(text) }` — plain write functions, with no `isTTY` information passed through at all. So H4's color-support milestone cannot simply read `.isTTY` off something already flowing through `runCli`; it will need to widen `CliIO` (or add a separate parameter) to carry `process.stdout.isTTY` explicitly from `bin/pathkit` into `runCli`/`runReport`. Recorded here now, concretely, rather than left as a guess for H4 to rediscover.
+
+Full suite verified after both refactors: 20 suites, 148 tests (143 before H1, +2 `describePath` cases, +3 `listTraceFiles` cases), lint and typecheck clean, `git diff --stat` showing only the four files the plan named plus the one new test file.
+
+No new dependency this milestone.
+
 ---
 
 **Gap 2 is complete as of G11.** Both pieces of PathKit's originally-planned scope (`temporal-pathkit-idea.md`) are now shipped: Gap 1 (static path/branch analysis, M0–M7) and Gap 2 (workflow path coverage tracking, G0–G11). Any future work on this project starts from a clean, fully-shipped baseline — see `PLAN.md` for the full milestone history and `LIMITATIONS.md` for the consolidated, honest list of what both gaps do and don't cover.

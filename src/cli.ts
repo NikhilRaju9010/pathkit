@@ -1,7 +1,7 @@
-import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
-import { CoverageReport, mergeCoverageTraces } from './coverageReport';
+import { CoverageReport, listTraceFiles, mergeCoverageTraces } from './coverageReport';
 import { PathKitError } from './errors';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
@@ -159,12 +159,13 @@ function runCoverage(args: string[], io: CliIO): number {
 
   let traceFilePaths: string[];
   try {
-    traceFilePaths = readdirSync(tracesDir)
-      .filter((name) => name.endsWith('.json'))
-      .map((name) => join(tracesDir, name));
+    traceFilePaths = listTraceFiles(tracesDir);
   } catch (err) {
-    io.stderr(`pathkit coverage: could not read traces directory ${tracesDir}: ${(err as Error).message}\n`);
-    return 1;
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit coverage: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
   }
 
   let report: CoverageReport;
