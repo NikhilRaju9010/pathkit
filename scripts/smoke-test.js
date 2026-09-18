@@ -37,6 +37,173 @@ function runInstalledCli(binPath, args) {
   }
 }
 
+/**
+ * G10's real proof of Decision 1 (`@temporalio/client`/`@temporalio/worker`
+ * stay in pathkit's own `devDependencies`, never `dependencies`): installs
+ * those four `@temporalio/*` packages into the *same* throwaway consumer
+ * project that only received pathkit's real `dependencies` above, then runs
+ * a real end-to-end script that imports ONLY `prepareCoverageRun`/
+ * `recordCoverageTrace` from the installed pathkit package and does its own
+ * `Worker`/`TestWorkflowEnvironment`/`Client` orchestration using those
+ * separately-installed packages — exactly the shape a real downstream
+ * user's own test file would have. Also simulates a leftover instrumented
+ * file from a "prior crashed run" to prove `prepareCoverageRun`'s
+ * best-effort cleanup pass actually removes it.
+ *
+ * This is a plain Node script, not a real Jest suite — Jest/ts-jest/
+ * typescript would need installing into the consumer project too, for no
+ * real benefit over plain assertions that throw on failure (matching this
+ * smoke-test script's own existing style throughout).
+ */
+function runCoverageHelperSmokeTest(consumerDir) {
+  // The direct proof of Decision 1, in the right order to actually prove it:
+  // require the installed package's main entry point (which pulls in
+  // instrument.ts and coverageReport.ts) BEFORE any @temporalio/* package
+  // is installed in this consumer project. If pathkit's own runtime code
+  // ever accidentally needed one of them (the exact "ts-morph was wrongly a
+  // devDependency" bug class), this would fail right here with a clear
+  // "Cannot find module" error — installing @temporalio/* first, as the
+  // later live end-to-end check needs to, would silently hide that bug.
+  console.log("Requiring the installed package's main entry point (no @temporalio/* packages installed yet)...");
+  let requireCheckOutput;
+  try {
+    requireCheckOutput = run(
+      process.execPath,
+      [
+        '-e',
+        "const m = require('@nikhilrajutirlange/pathkit'); " +
+          "if (typeof m.prepareCoverageRun !== 'function' || typeof m.recordCoverageTrace !== 'function') " +
+          "{ throw new Error('prepareCoverageRun/recordCoverageTrace are not exported as functions: ' + JSON.stringify(Object.keys(m))); } " +
+          "console.log('OK');",
+      ],
+      { cwd: consumerDir },
+    );
+  } catch (err) {
+    const stderr = typeof err.stderr === 'string' ? err.stderr.trim() : String(err.stderr ?? err.message);
+    throw new SmokeTestFailure(
+      `Requiring the installed package failed before any @temporalio/* package was installed — this likely means ` +
+        `pathkit's own runtime code now needs one of them at import time, which must stay a devDependency, not a ` +
+        `dependency (see CLAUDE.md's Decision 1):\n${stderr}`,
+    );
+  }
+  if (!requireCheckOutput.includes('OK')) {
+    throw new SmokeTestFailure(`Requiring the installed package produced unexpected output:\n${requireCheckOutput}`);
+  }
+  console.log('  OK');
+
+  console.log("Installing @temporalio/client, worker, testing, and workflow (this consumer project's own devDependencies)...");
+  run(
+    'npm',
+    ['install', '@temporalio/client@^1.24.0', '@temporalio/worker@^1.24.0', '@temporalio/testing@^1.24.0', '@temporalio/workflow@^1.24.0'],
+    { cwd: consumerDir, stdio: 'inherit' },
+  );
+
+  const workflowFilePath = path.join(consumerDir, 'sample-coverage-workflow.ts');
+  fs.writeFileSync(
+    workflowFilePath,
+    "export async function sampleCoverageWorkflow(isHeads: boolean): Promise<string> {\n" +
+      '  if (isHeads) {\n' +
+      "    return 'yes';\n" +
+      '  } else {\n' +
+      "    return 'no';\n" +
+      '  }\n' +
+      '}\n',
+  );
+
+  const checkerScriptPath = path.join(consumerDir, 'coverage-helper-check.js');
+  fs.writeFileSync(checkerScriptPath, buildCoverageHelperCheckerScript());
+
+  console.log('Running the prepareCoverageRun/recordCoverageTrace end-to-end check from the installed package...');
+  try {
+    const output = execFileSync(process.execPath, [checkerScriptPath], { encoding: 'utf8', cwd: consumerDir });
+    process.stdout.write(output);
+  } catch (err) {
+    const stderr = typeof err.stderr === 'string' ? err.stderr.trim() : String(err.stderr ?? err.message);
+    throw new SmokeTestFailure(`prepareCoverageRun/recordCoverageTrace end-to-end check failed:\n${stderr}`);
+  }
+  console.log('  OK');
+}
+
+/** Generates the plain-Node checker script run inside the consumer project (see `runCoverageHelperSmokeTest`). */
+function buildCoverageHelperCheckerScript() {
+  return `
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { prepareCoverageRun, recordCoverageTrace } = require('@nikhilrajutirlange/pathkit');
+const { TestWorkflowEnvironment } = require('@temporalio/testing');
+const { Worker } = require('@temporalio/worker');
+
+(async () => {
+  const workflowFilePath = path.join(__dirname, 'sample-coverage-workflow.ts');
+
+  // Simulate a leftover instrumented file from a prior crashed run that
+  // never reached its own cleanup() — prepareCoverageRun's best-effort
+  // cleanup pass must remove this before writing its own fresh copy.
+  const staleFilePath = path.join(
+    __dirname,
+    'sample-coverage-workflow.sampleCoverageWorkflow.deadbeef-0000-0000-0000-000000000000.pathkit-instrumented.ts',
+  );
+  fs.writeFileSync(staleFilePath, '// stale leftover from a prior crashed run\\n');
+
+  const { instrumentedFilePath, cleanup } = prepareCoverageRun(workflowFilePath, 'sampleCoverageWorkflow');
+
+  if (fs.existsSync(staleFilePath)) {
+    throw new Error('prepareCoverageRun did not remove the stale leftover instrumented file');
+  }
+
+  const testEnv = await TestWorkflowEnvironment.createTimeSkipping();
+  let trace;
+  try {
+    const worker = await Worker.create({
+      connection: testEnv.nativeConnection,
+      taskQueue: 'smoke-test-tq',
+      workflowsPath: instrumentedFilePath,
+    });
+
+    const handle = await testEnv.client.workflow.start('sampleCoverageWorkflow', {
+      workflowId: 'smoke-test-wf-' + crypto.randomUUID(),
+      taskQueue: 'smoke-test-tq',
+      args: [true],
+    });
+
+    // The query must be issued while the Worker is still polling (see
+    // README.md) — issuing it after runUntil() resolves hangs forever.
+    trace = await worker.runUntil(async () => {
+      await handle.result();
+      return handle.query('__pathkit_coverage__sampleCoverageWorkflow');
+    });
+  } finally {
+    await testEnv.teardown();
+  }
+
+  if (!Array.isArray(trace) || trace.length !== 1) {
+    throw new Error('Unexpected coverage trace: ' + JSON.stringify(trace));
+  }
+
+  const traceDir = path.join(__dirname, '.pathkit-smoke-traces');
+  const traceFilePath = recordCoverageTrace(traceDir, workflowFilePath, 'sampleCoverageWorkflow', trace);
+  if (!fs.existsSync(traceFilePath)) {
+    throw new Error('recordCoverageTrace did not write a trace file');
+  }
+  const written = JSON.parse(fs.readFileSync(traceFilePath, 'utf8'));
+  if (written.functionName !== 'sampleCoverageWorkflow' || written.rawTrace.length !== 1) {
+    throw new Error('Unexpected trace file contents: ' + JSON.stringify(written));
+  }
+
+  cleanup();
+  if (fs.existsSync(instrumentedFilePath)) {
+    throw new Error('cleanup() did not remove the instrumented file');
+  }
+
+  console.log('prepareCoverageRun/recordCoverageTrace end-to-end check passed.');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+`;
+}
+
 function main() {
   console.log('Building...');
   run('npm', ['run', 'build'], { cwd: projectRoot, stdio: 'inherit' });
@@ -81,6 +248,8 @@ function main() {
       throw new SmokeTestFailure('`pathkit analyze` did not print Mermaid output as expected.');
     }
     console.log('  OK');
+
+    runCoverageHelperSmokeTest(consumerDir);
 
     console.log('\nSMOKE TEST PASSED — the published package layout works end to end.');
   } finally {

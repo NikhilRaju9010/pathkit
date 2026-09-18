@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { removeInstrumentedCopy, writeInstrumentedCopy } from '../src/instrument';
+import { prepareCoverageRun, removeInstrumentedCopy, writeInstrumentedCopy } from '../src/instrument';
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
@@ -74,5 +74,70 @@ describe('writeInstrumentedCopy / removeInstrumentedCopy — G2 (Gap 2)', () => 
     removeInstrumentedCopy(instrumentedPath);
     expect(fs.existsSync(instrumentedPath)).toBe(false);
     expect(() => removeInstrumentedCopy(instrumentedPath)).not.toThrow();
+  });
+});
+
+describe('prepareCoverageRun — G10 (Gap 2)', () => {
+  const fixturePath = path.join(__dirname, 'fixtures', 'g2', 'workflow-with-import.ts');
+  let cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const cleanup of cleanups) cleanup();
+    cleanups = [];
+  });
+
+  it('writes an instrumented copy and returns a cleanup() that removes it', () => {
+    const { instrumentedFilePath, cleanup } = prepareCoverageRun(fixturePath, 'usesHelper');
+    cleanups.push(cleanup);
+
+    expect(fs.existsSync(instrumentedFilePath)).toBe(true);
+    cleanup();
+    expect(fs.existsSync(instrumentedFilePath)).toBe(false);
+  });
+
+  it("cleanup() is safe to call more than once (e.g. wired into both a test's own logic and afterEach)", () => {
+    const { instrumentedFilePath, cleanup } = prepareCoverageRun(fixturePath, 'usesHelper');
+    cleanup();
+    expect(() => cleanup()).not.toThrow();
+    expect(fs.existsSync(instrumentedFilePath)).toBe(false);
+  });
+
+  it('removes a stale instrumented copy left behind by a prior crashed run before writing a new one', () => {
+    const dir = path.dirname(fixturePath);
+    const staleFilePath = path.join(
+      dir,
+      'workflow-with-import.usesHelper.deadbeef-0000-0000-0000-000000000000.pathkit-instrumented.ts',
+    );
+    fs.writeFileSync(staleFilePath, '// stale leftover from a prior crashed run\n', 'utf8');
+
+    try {
+      expect(fs.existsSync(staleFilePath)).toBe(true);
+
+      const { instrumentedFilePath, cleanup } = prepareCoverageRun(fixturePath, 'usesHelper');
+      cleanups.push(cleanup);
+
+      expect(fs.existsSync(staleFilePath)).toBe(false); // removed by the best-effort cleanup pass
+      expect(fs.existsSync(instrumentedFilePath)).toBe(true); // the new run's own copy is unaffected
+    } finally {
+      fs.rmSync(staleFilePath, { force: true }); // in case the cleanup pass itself failed for some reason
+    }
+  });
+
+  it('does not remove an instrumented copy belonging to a different function in the same directory', () => {
+    const dir = path.dirname(fixturePath);
+    const unrelatedFilePath = path.join(
+      dir,
+      'workflow-with-import.someOtherFunction.deadbeef-0000-0000-0000-000000000000.pathkit-instrumented.ts',
+    );
+    fs.writeFileSync(unrelatedFilePath, '// belongs to a different function\n', 'utf8');
+
+    try {
+      const { cleanup } = prepareCoverageRun(fixturePath, 'usesHelper');
+      cleanups.push(cleanup);
+
+      expect(fs.existsSync(unrelatedFilePath)).toBe(true);
+    } finally {
+      fs.rmSync(unrelatedFilePath, { force: true });
+    }
   });
 });

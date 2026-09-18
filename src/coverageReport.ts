@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
 import { PathKitError } from './errors';
 import { buildWorkflowGraphWithNodeRefs, WorkflowGraph } from './graph';
 import { enumeratePathsWithEdgeIndices } from './paths';
@@ -63,6 +64,44 @@ export interface MergeCoverageTracesOptions {
 
 export function computeSourceHash(sourceText: string): string {
   return createHash('sha256').update(sourceText, 'utf8').digest('hex');
+}
+
+/**
+ * The other half of PathKit's public, `@temporalio/*`-import-free test-helper
+ * surface (alongside `prepareCoverageRun` in `instrument.ts`): writes one
+ * `CoverageTraceFile` to `traceDir`, computing `sourceHash` from the
+ * *original* (not instrumented) workflow file so `mergeCoverageTraces` can
+ * later detect if the source has changed since this trace was recorded.
+ * Call this from your own test right after querying the instrumented
+ * workflow's coverage query (see README.md), passing that query's result
+ * directly as `rawTrace`.
+ *
+ * `traceDir` is created (including any missing parent directories) if it
+ * doesn't exist yet — a fresh checkout with no prior coverage runs has no
+ * reason to already have one. The written filename is always unique
+ * (`<functionName>-<uuid>.json`) so concurrent test workers, or repeated
+ * runs, never collide or overwrite each other's trace files; this function
+ * returns the exact path written, mainly for logging/debugging.
+ */
+export function recordCoverageTrace(
+  traceDir: string,
+  workflowFilePath: string,
+  functionName: string,
+  rawTrace: readonly string[],
+): string {
+  const trace: CoverageTraceFile = {
+    schemaVersion: 1,
+    workflowFile: workflowFilePath,
+    functionName,
+    sourceHash: computeSourceHash(readFileSync(workflowFilePath, 'utf8')),
+    recordedAt: new Date().toISOString(),
+    rawTrace: [...rawTrace],
+  };
+
+  mkdirSync(traceDir, { recursive: true });
+  const traceFilePath = path.join(traceDir, `${functionName}-${randomUUID()}.json`);
+  writeFileSync(traceFilePath, JSON.stringify(trace, null, 2), 'utf8');
+  return traceFilePath;
 }
 
 /**

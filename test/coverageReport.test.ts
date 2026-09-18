@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { buildWorkflowGraphWithNodeRefs } from '../src/graph';
-import { computeSourceHash, CoverageTraceFile, mergeCoverageTraces } from '../src/coverageReport';
+import { computeSourceHash, CoverageTraceFile, mergeCoverageTraces, recordCoverageTrace } from '../src/coverageReport';
 import { parseWorkflowFile } from '../src/parser';
 
 /**
@@ -178,5 +178,57 @@ describe('mergeCoverageTraces — G8 (Gap 2)', () => {
     expect(report.totalPaths).toBe(2000); // DEFAULT_MAX_PATHS, not the true 4096
     expect(report.coveredCount).toBe(0);
     expect(report.percentage).toBe(0);
+  });
+});
+
+describe('recordCoverageTrace — G10 (Gap 2)', () => {
+  it('writes a trace file with a unique name and returns the path written', () => {
+    const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
+    const first = recordCoverageTrace(traceDir, filePath, 'simpleIfElse', ['1']);
+    const second = recordCoverageTrace(traceDir, filePath, 'simpleIfElse', ['2']);
+
+    expect(first).not.toBe(second);
+    expect(existsSync(first)).toBe(true);
+    expect(existsSync(second)).toBe(true);
+    expect(path.basename(first)).toMatch(/^simpleIfElse-.+\.json$/);
+  });
+
+  it('writes a schema-correct trace, with sourceHash computed from the real workflow file', () => {
+    const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
+    const traceFilePath = recordCoverageTrace(traceDir, filePath, 'simpleIfElse', ['1']);
+
+    const written = JSON.parse(readFileSync(traceFilePath, 'utf8')) as CoverageTraceFile;
+    expect(written.schemaVersion).toBe(1);
+    expect(written.workflowFile).toBe(filePath);
+    expect(written.functionName).toBe('simpleIfElse');
+    expect(written.rawTrace).toEqual(['1']);
+    expect(written.sourceHash).toBe(computeSourceHash(readFileSync(filePath, 'utf8')));
+    expect(() => new Date(written.recordedAt).toISOString()).not.toThrow();
+  });
+
+  it('creates traceDir (including missing parent directories) if it does not exist yet', () => {
+    const nestedDir = path.join(traceDir, 'does', 'not', 'exist', 'yet');
+    const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
+
+    const traceFilePath = recordCoverageTrace(nestedDir, filePath, 'simpleIfElse', []);
+
+    expect(existsSync(traceFilePath)).toBe(true);
+  });
+
+  it('round-trips directly into mergeCoverageTraces — the exact real usage pattern', () => {
+    const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
+    const fn = parseWorkflowFile(filePath).find((f) => f.name === 'simpleIfElse')!;
+    const { graph, outcomeEdgeIndex } = buildWorkflowGraphWithNodeRefs(fn.node, 'simpleIfElse');
+    const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
+    const trueIdx = String(outcomeEdgeIndex.get(`${decisionId}#true`));
+
+    recordCoverageTrace(traceDir, filePath, 'simpleIfElse', [trueIdx]);
+
+    const traceFilePaths = readdirSync(traceDir).map((name) => path.join(traceDir, name));
+    const report = mergeCoverageTraces(filePath, 'simpleIfElse', traceFilePaths);
+
+    expect(report.unmatchedTraces).toEqual([]);
+    expect(report.coveredCount).toBe(1);
+    expect(report.percentage).toBe(50);
   });
 });

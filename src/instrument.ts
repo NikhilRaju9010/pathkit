@@ -1,4 +1,4 @@
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { CallExpression, Node, SourceFile, Statement } from 'ts-morph';
@@ -69,6 +69,73 @@ export function writeInstrumentedCopy(workflowFilePath: string, functionName: st
 /** Deletes an instrumented copy. Never throws if the file is already gone. */
 export function removeInstrumentedCopy(instrumentedFilePath: string): void {
   rmSync(instrumentedFilePath, { force: true });
+}
+
+export interface PrepareCoverageRunResult {
+  instrumentedFilePath: string;
+  /**
+   * Deletes the instrumented copy. Safe to call more than once, and safe to
+   * call even if the file was already removed some other way. Wire this
+   * into your test framework's `afterEach`/`afterAll` (not just the end of
+   * the happy path), so the instrumented sibling file is still cleaned up
+   * even when a test throws or an assertion fails partway through.
+   */
+  cleanup: () => void;
+}
+
+/**
+ * The developer-facing entry point for coverage tracking: instruments a
+ * fresh copy of `functionName` in `workflowFilePath` (see
+ * `writeInstrumentedCopy`) and returns its path plus a `cleanup()` to
+ * remove it again. This — together with `recordCoverageTrace` — is
+ * PathKit's entire public, `@temporalio/*`-import-free surface for this
+ * feature; actually running the instrumented copy through a real
+ * `TestWorkflowEnvironment`/`Worker` and querying its trace is up to your
+ * own test, using whatever `@temporalio/testing`/`@temporalio/worker`
+ * version your project already depends on (see README.md for a full
+ * worked example, including a landmine worth knowing about: a Query must
+ * be issued while the Worker is still polling — one issued after your test
+ * has stopped the Worker will hang forever).
+ *
+ * Before writing the new instrumented copy, this does a best-effort pass
+ * removing any stale `<sourceName>.<functionName>.*.pathkit-instrumented.ts`
+ * files left behind in the same directory by a prior crashed run (one that
+ * never reached its own `cleanup()`). This is purely to avoid disk clutter,
+ * not a correctness requirement — the fresh copy's filename is always
+ * unique on its own via `crypto.randomUUID()` — so a failure to remove a
+ * stale file (e.g. it's locked by another concurrent test run) is silently
+ * ignored rather than blocking this run.
+ */
+export function prepareCoverageRun(workflowFilePath: string, functionName: string): PrepareCoverageRunResult {
+  removeStaleInstrumentedCopies(workflowFilePath, functionName);
+  const instrumentedFilePath = writeInstrumentedCopy(workflowFilePath, functionName);
+  return {
+    instrumentedFilePath,
+    cleanup: () => removeInstrumentedCopy(instrumentedFilePath),
+  };
+}
+
+function removeStaleInstrumentedCopies(workflowFilePath: string, functionName: string): void {
+  const dir = path.dirname(workflowFilePath);
+  const sourceName = path.basename(workflowFilePath, path.extname(workflowFilePath));
+  const prefix = `${sourceName}.${functionName}.`;
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return; // best-effort — if we can't even list the directory, just proceed
+  }
+
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith(`.${INSTRUMENTED_SUFFIX}`)) continue;
+    try {
+      rmSync(path.join(dir, entry), { force: true });
+    } catch {
+      // best-effort — a stale file we can't remove doesn't block writing a
+      // new one, since the new filename's uniqueness never depends on this.
+    }
+  }
 }
 
 function instrumentedFilePathFor(workflowFilePath: string, functionName: string): string {

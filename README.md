@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then renders the result as a Mermaid diagram.
 
-> **Status:** v0.3.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise) now has a working `pathkit coverage` report command; the developer-facing helper for *recording* traces from your own test suite is still under active development — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
+> **Status:** v0.4.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise) is now fully working end to end: `prepareCoverageRun`/`recordCoverageTrace` record traces from your own Temporal test suite, and `pathkit coverage` reports on them. Final polish (consolidated docs, a last `demo/` walkthrough) is still in progress — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
 
 ## Install
 
@@ -80,7 +80,7 @@ More example workflows (order processing, a retry/poll loop, a signal-driven app
 
 ## Coverage tracking (Gap 2 — in progress)
 
-`pathkit coverage` reports which of a workflow function's statically-declared paths your tests actually exercised, by merging recorded trace files against the same path list `analyze` computes. Coverage tracking still needs a developer-facing helper (coming in a later milestone) to actually *produce* those trace files from your own Temporal test suite — for now, this command is the report-reading half of the feature.
+`pathkit coverage` reports which of a workflow function's statically-declared paths your tests actually exercised, by merging recorded trace files against the same path list `analyze` computes. Two small helper functions — `prepareCoverageRun` and `recordCoverageTrace` — produce those trace files from your own Temporal test suite; see "Recording traces from your own tests" below.
 
 ```bash
 npx pathkit coverage <path-to-workflow-file.ts> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]
@@ -114,6 +114,66 @@ Untested paths:
   - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --failure--> End
   - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --success--> End
 ```
+
+### Recording traces from your own tests
+
+PathKit ships two small functions — `prepareCoverageRun` and `recordCoverageTrace` — that are the entire public surface for this half of the feature. Neither one imports anything from `@temporalio/*`: `prepareCoverageRun` only writes an instrumented copy of your workflow file, and `recordCoverageTrace` only writes a trace JSON file. Running the instrumented copy through a real Temporal Worker is up to your own test, using whatever `@temporalio/worker`/`@temporalio/testing`/`@temporalio/client` version your project already depends on.
+
+```ts
+import { prepareCoverageRun, recordCoverageTrace } from '@nikhilrajutirlange/pathkit';
+import { TestWorkflowEnvironment } from '@temporalio/testing';
+import { Worker } from '@temporalio/worker';
+
+describe('reportPollingWorkflow coverage', () => {
+  let testEnv: TestWorkflowEnvironment;
+
+  beforeAll(async () => {
+    testEnv = await TestWorkflowEnvironment.createTimeSkipping();
+  });
+
+  afterAll(async () => {
+    await testEnv.teardown();
+  });
+
+  it('records which paths a passing test actually exercised', async () => {
+    const workflowFilePath = require.resolve('../src/workflows/report-polling-workflow');
+    const { instrumentedFilePath, cleanup } = prepareCoverageRun(workflowFilePath, 'reportPollingWorkflow');
+
+    // Recommended: wire cleanup() into afterEach/afterAll too, not just the
+    // end of the happy path below — the instrumented sibling file must
+    // still be removed even if this test throws or an assertion fails
+    // partway through.
+    try {
+      const worker = await Worker.create({
+        connection: testEnv.nativeConnection,
+        taskQueue: 'coverage-test',
+        workflowsPath: instrumentedFilePath, // the instrumented copy, not the original file
+      });
+
+      const handle = await testEnv.client.workflow.start('reportPollingWorkflow', {
+        workflowId: 'coverage-test-1',
+        taskQueue: 'coverage-test',
+        args: [{ reportId: 'r1', maxPollAttempts: 5 }],
+      });
+
+      // IMPORTANT: query the coverage trace from *inside* runUntil, while
+      // the Worker is still polling. runUntil stops the Worker as soon as
+      // its callback's promise resolves, and a Query issued after that has
+      // no Worker left to compute it — it will hang forever, not error.
+      const rawTrace = await worker.runUntil(async () => {
+        await handle.result();
+        return handle.query('__pathkit_coverage__reportPollingWorkflow');
+      });
+
+      recordCoverageTrace('.pathkit/coverage', workflowFilePath, 'reportPollingWorkflow', rawTrace);
+    } finally {
+      cleanup();
+    }
+  });
+});
+```
+
+Run this test as part of your normal suite (as many times, across as many test cases, as you like — `recordCoverageTrace` always writes a uniquely-named file, so parallel test workers and repeated runs never collide), then run `pathkit coverage` against the same `.pathkit/coverage` directory to see the combined report.
 
 ## What PathKit detects (v1)
 
