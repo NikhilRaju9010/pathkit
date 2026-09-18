@@ -46,7 +46,7 @@ export function runCli(argv: string[], io: CliIO): number {
       '  --version\n' +
       '  analyze <file> [--out <path>]\n' +
       '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
-      '  report <dir> --traces <dir> [--json] [--no-color]\n',
+      '  report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n',
   );
   return 1;
 }
@@ -264,13 +264,15 @@ function parseCoverageArgs(args: string[]): CoverageArgs {
 interface ReportArgs {
   dir: string | undefined;
   tracesDir: string | undefined;
+  outPath: string | undefined;
   json: boolean;
   noColor: boolean;
+  allowStale: boolean;
 }
 
 function runReport(args: string[], io: CliIO): number {
-  const usage = 'Usage: pathkit report <dir> --traces <dir> [--json] [--no-color]\n';
-  const { dir, tracesDir, json, noColor } = parseReportArgs(args);
+  const usage = 'Usage: pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n';
+  const { dir, tracesDir, outPath, json, noColor, allowStale } = parseReportArgs(args);
 
   if (dir === undefined) {
     io.stderr(`pathkit report: missing <dir> argument. ${usage}`);
@@ -299,7 +301,7 @@ function runReport(args: string[], io: CliIO): number {
 
   let report: ProjectReport;
   try {
-    report = buildProjectReport(discovered.workflows, tracesDir);
+    report = buildProjectReport(discovered.workflows, tracesDir, { allowStale });
   } catch (err) {
     if (err instanceof PathKitError) {
       io.stderr(`pathkit report: ${err.message}\n`);
@@ -311,6 +313,14 @@ function runReport(args: string[], io: CliIO): number {
   const colorEnabled = shouldColorize(io.isTTY, noColor);
   const output = json ? `${JSON.stringify(report, null, 2)}\n` : formatReportText(report, colorEnabled);
   io.stdout(output);
+
+  if (outPath !== undefined) {
+    // Always plain, uncolored text on disk, regardless of this run's own
+    // terminal color state — a file is not a terminal. `--json` output has
+    // no color to begin with, so it's written as-is.
+    const fileOutput = json ? output : formatReportText(report, false);
+    writeFileSync(outPath, fileOutput, 'utf8');
+  }
 
   const warnings = [
     ...discovered.warnings.map((w) => `  - ${w.filePath}: ${w.error}`),
@@ -351,24 +361,30 @@ function formatReportRowText(row: WorkflowReportRow, colorEnabled: boolean): str
 
 function parseReportArgs(args: string[]): ReportArgs {
   let tracesDir: string | undefined;
+  let outPath: string | undefined;
   let json = false;
   let noColor = false;
+  let allowStale = false;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--traces') {
       tracesDir = args[++i];
+    } else if (arg === '--out') {
+      outPath = args[++i];
     } else if (arg === '--json') {
       json = true;
     } else if (arg === '--no-color') {
       noColor = true;
+    } else if (arg === '--allow-stale') {
+      allowStale = true;
     } else if (arg !== undefined) {
       positional.push(arg);
     }
   }
 
-  return { dir: positional[0], tracesDir, json, noColor };
+  return { dir: positional[0], tracesDir, outPath, json, noColor, allowStale };
 }
 
 function getPackageVersion(): string {

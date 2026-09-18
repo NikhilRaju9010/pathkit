@@ -273,3 +273,17 @@ Writing this milestone's CLI tests surfaced a real, genuinely RED-able regressio
 True TTY-mode color rendering itself can't be asserted by the existing `spawnSync`-based subprocess harness, since a spawned child's stdout is always a pipe, never a real terminal, matching the plan's own acknowledged limitation. Verified manually instead, using `script -qec "<cmd>" /dev/null` to allocate a real pseudo-terminal (confirmed by directly inspecting the raw output bytes): a real TTY run shows `covered`/`missed` wrapped in real `\x1b[32m`/`\x1b[31m`...`\x1b[0m` ANSI codes; a piped run, a `NO_COLOR=1` run (even under a real pty), and a `--no-color` run (even under a real pty) all produce byte-identical plain text with the literal words and zero escape bytes. The three non-TTY-forcing subprocess tests (default piped output, `NO_COLOR=1`, `--no-color`) can't literally RED against "color not implemented yet" — a spawned test process is never a TTY regardless, so output was already plain before this milestone — but they remain valuable regression coverage against a future bug that colorizes unconditionally regardless of `isTTY`.
 
 No new dependency this milestone.
+
+## 2026-09-18 — Gap 3 (H5): `--out`, `--allow-stale`, doc finalization, version bump
+
+Rounded `report` out to flag parity with `coverage` (minus the deliberately-omitted `--clean`/`--function`, per the original plan's design decision 6 — `report` always covers every discovered function and re-reads the same trace directory `coverage` does, so cross-command deletion semantics stay a possible future addition, not part of this pass).
+
+`--out <path>` writes the report to disk. Per the locked design decision from planning (Q5), it **always writes plain, uncolored text, even when the terminal run itself showed color** — computed as a genuinely separate call, `formatReportText(report, false)`, not by stripping ANSI codes out of the already-colorized stdout string. `--json` output has no color to begin with, so it's written to disk exactly as shown on stdout. Verified manually (not just via the automated `--out` tests, which never run under a real TTY anyway) using the same `script -qec` pseudo-terminal technique H4 established: a real-TTY run with `--out` shows actual ANSI codes on the terminal while the written file, inspected directly with `cat -v`, is completely plain — confirming the file output is genuinely TTY-state-independent, not just coincidentally plain because the test harness never colorizes.
+
+`--allow-stale` is threaded straight into `buildProjectReport`'s existing `options.allowStale` parameter (already present since H2, just never wired to a CLI flag) — no new logic, purely plumbing. Verified with a dedicated test reusing G8's stale-`sourceHash` scenario: a trace recorded against a different version of the workflow file is reported as unmatched (0/2 covered) by default, and correctly matched (1/2 covered) once `--allow-stale` is passed.
+
+`README.md`'s "Combined report" section gained the full final flag list and color/`--allow-stale` behavior descriptions. `package.json` bumped `0.4.0` → `0.5.0` per the project's existing CLI-facing-change package-hygiene rule (the entire `report` command, spanning H3–H5, is new CLI surface); `package-lock.json` resynced via `npm install --package-lock-only`.
+
+Full verification: `npm run lint && npm run typecheck && npm test && npm run smoke` all clean — 22 suites, 182 tests.
+
+No new dependency this milestone.

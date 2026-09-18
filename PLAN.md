@@ -64,5 +64,5 @@ details and design rationale live in the plan document this section mirrors
 - [x] **H2** — `classifyCoverage` (one shared percentage/bucket function) and `buildProjectReport`, composing `discoverWorkflows` + `mergeCoverageTraces` + `describePath` into a plain-data pipeline. Required a small additive extension to `CoverageReport` itself (`orderedPaths`, see CLAUDE.md) since Gap 2's existing `coveredPaths`/`untestedPaths` split loses declared path order. Library-only, no CLI yet.
 - [x] **H3** — Plain-text (and `--json`) `pathkit report` CLI command, no color yet. Also fixed a real gap surfaced by the CLI's error-handling needs: `discoverWorkflows` never validated its own `dir` argument, leaking a raw Node `ENOENT`/`ENOTDIR` error instead of a clean `PathKitError` — see CLAUDE.md.
 - [x] **H4** — Color support (`isTTY`/`NO_COLOR`/`--no-color`), wired into `report`'s formatter only. `CliIO` gained an optional `isTTY` field, threaded from `bin/pathkit`'s `process.stdout.isTTY`; `analyze`/`coverage` untouched.
-- [ ] **H5** — `--out`, `--allow-stale`, doc finalization, version bump.
+- [x] **H5** — `--out` (always plain, uncolored text on disk regardless of terminal color state), `--allow-stale`, doc finalization, version bump (`0.4.0` → `0.5.0`).
 - [ ] **H6** — Final `demo/` walkthrough + full-suite verification (documentation only, no `src/` changes).

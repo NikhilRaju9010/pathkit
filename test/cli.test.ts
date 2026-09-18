@@ -207,7 +207,13 @@ describe('bin/pathkit report (real subprocess)', () => {
     rmSync(tracesDir, { recursive: true, force: true });
   });
 
-  function writeTrace(fileName: string, workflowFilePath: string, functionName: string, rawTrace: string[]): void {
+  function writeTrace(
+    fileName: string,
+    workflowFilePath: string,
+    functionName: string,
+    rawTrace: string[],
+    overrides: Record<string, unknown> = {},
+  ): void {
     const trace = {
       schemaVersion: 1,
       workflowFile: workflowFilePath,
@@ -215,6 +221,7 @@ describe('bin/pathkit report (real subprocess)', () => {
       sourceHash: computeSourceHash(readFileSync(workflowFilePath, 'utf8')),
       recordedAt: new Date().toISOString(),
       rawTrace,
+      ...overrides,
     };
     writeFileSync(path.join(tracesDir, fileName), JSON.stringify(trace), 'utf8');
   }
@@ -327,5 +334,46 @@ describe('bin/pathkit report (real subprocess)', () => {
         process.env.NO_COLOR = previousNoColor;
       }
     }
+  });
+
+  it('writes the same plain-text report content to disk when --out is passed', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+    const outPath = path.join(tracesDir, 'report.txt');
+
+    const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--out', outPath]);
+
+    expect(result.exitCode).toBe(0);
+    const written = readFileSync(outPath, 'utf8');
+    expect(written).toBe(result.stdout);
+    expect(written).toContain('orderWorkflow');
+    expect(written).not.toMatch(/\[/); // no ANSI bytes, even though this run is never a real TTY anyway
+  });
+
+  it('writes the same serialized JSON to disk when --out is passed with --json', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+    const outPath = path.join(tracesDir, 'report.json');
+
+    const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--json', '--out', outPath]);
+
+    expect(result.exitCode).toBe(0);
+    const written = readFileSync(outPath, 'utf8');
+    expect(written).toBe(result.stdout);
+    expect(JSON.parse(written)).toHaveProperty('totalPaths', 5);
+  });
+
+  it('reports a stale-sourceHash trace as unmatched by default, but matches it when --allow-stale is passed', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx], { sourceHash: 'not-the-real-hash' });
+
+    const strict = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir]);
+    expect(strict.exitCode).toBe(0);
+    expect(strict.stdout).toContain('0/2 paths');
+    expect(strict.stderr).toMatch(/could not be matched|sourceHash/i);
+
+    const lenient = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--allow-stale']);
+    expect(lenient.exitCode).toBe(0);
+    expect(lenient.stdout).toContain('1/2 paths');
   });
 });

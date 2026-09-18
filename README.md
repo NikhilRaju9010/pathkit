@@ -180,12 +180,15 @@ Run this test as part of your normal suite (as many times, across as many test c
 `pathkit coverage` reports on one workflow function at a time. `pathkit report` recursively scans a whole directory for workflow files and combines `analyze`'s path list with `coverage`'s trace matching into one project-wide view: every declared path for every exported workflow function found, each marked covered or missed, with a per-workflow subtotal and a project-wide total.
 
 ```bash
-npx pathkit report <dir> --traces <dir> [--json]
+npx pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]
 ```
 
 - `<dir>` is scanned recursively for `*.ts` files, skipping `node_modules`, `dist`, `build`, `coverage`, and `.git` directories, `.d.ts` declaration files, generated `*.pathkit-instrumented.ts` files, and test files (`*.test.ts`/`*.spec.ts`, or anything under a `__tests__`/`test` directory). Every exported function found in every matched file is treated as one workflow.
 - `--traces <dir>` (required) is the same trace directory `pathkit coverage` reads — one shared directory works for every workflow's traces at once, since each trace file already self-identifies its function.
+- `--out <path>` also writes the report to disk — always as plain, uncolored text (or plain JSON with `--json`), regardless of whether the terminal run itself showed color.
 - `--json` prints the full aggregated report structure instead of the text format, for scripts/CI.
+- Individual path lines are colored green (`covered`) / red (`missed`) when stdout is a real terminal. Color is automatically disabled when piped (e.g. `pathkit report ... > out.txt`), when the `NO_COLOR` env var is set to any non-empty value, or when `--no-color` is passed — piped/non-color output always reads as plain text with the literal words "covered"/"missed", never raw ANSI codes. Only individual path lines are colored; per-workflow and project-wide total lines are always plain.
+- `--allow-stale` compares a trace against a workflow's current source even if its recorded `sourceHash` doesn't match, same as `pathkit coverage --allow-stale`.
 - A file that fails to parse, or a trace that can't be matched to any declared path, is reported as a warning on stderr — never silently dropped, and never a hard failure of the whole command.
 
 ### Example
