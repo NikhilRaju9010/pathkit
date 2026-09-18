@@ -37,6 +37,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "pretest": "npm run build",
     "test": "jest",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",

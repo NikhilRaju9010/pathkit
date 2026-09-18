@@ -12,6 +12,14 @@ PathKit parses a Temporal workflow file and maps every possible way it can execu
 npm install -D @nikhilrajutirlange/pathkit
 ```
 
+If the package isn't available on the npm registry yet (e.g. a pending npm account/OTP verification), install directly from git instead — a `prepare` script builds `dist/` automatically on install, so this works the same as a registry install:
+
+```bash
+npm install -D git+https://github.com/NikhilRaju9010/pathkit.git
+```
+
+This also works for local development: `git clone` the repo and run `npm install` inside it — `dist/` is built automatically, with no separate `npm run build` step required first.
+
 ## Usage
 
 ```bash
