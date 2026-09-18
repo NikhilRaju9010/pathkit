@@ -44,3 +44,25 @@ Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, 
 **Gap 2 (workflow path coverage tracking) is complete as of G11**, alongside Gap 1's own completion at M7 — both pieces of PathKit's originally-planned scope (`temporal-pathkit-idea.md`) are now shipped. The final `demo/` walkthrough ran `pathkit analyze` (4 total paths for `demo/report-polling-workflow.ts`) followed by two real `prepareCoverageRun`/`recordCoverageTrace` executions through a live `TestWorkflowEnvironment` (one succeeding immediately, one failing immediately) and `pathkit coverage` against the resulting traces, reporting `2/4 (50.0%)` with the correct two paths named as covered and the correct two named as untested.
 
 Full milestone details (files touched, visible result, Definition of Done per milestone) live in the plan document this section mirrors (kept in the Claude Code plan history, `i-want-to-build-sprightly-valiant.md`).
+
+## Gap 3 — Combined multi-file paths + coverage report
+
+Adds a new `pathkit report <dir> --traces <dir>` command that recursively scans a
+directory for workflow files and, for every exported function found, lists
+every statically-declared path (reusing Gap 1's `enumeratePathsWithEdgeIndices`
+unchanged) marked covered/missed against real coverage data (reusing Gap 2's
+`mergeCoverageTraces` unchanged, including its already-strict
+edge-index-identity matching — no design change needed there), with a
+per-workflow subtotal and a project-wide total. `analyze` and `coverage`
+themselves are left completely unchanged. Numbered `H0`–`H6` to stay clearly
+distinguished from Gap 1's `M0`–`M7` and Gap 2's `G0`–`G11`. Full milestone
+details and design rationale live in the plan document this section mirrors
+(`i-want-to-add-serialized-brooks.md`, kept in the Claude Code plan history).
+
+- [x] **H0** — `src/discovery.ts`'s `discoverWorkflows(dir)`: recursive directory scan finding every exported function across every matched workflow file, skipping `node_modules`/`test`/`__tests__`/`dist`/`build`/`coverage`/`.git` directories, generated `*.pathkit-instrumented.ts` files, `.d.ts` declaration files, and test files (`*.test.ts`/`*.spec.ts`); a file with zero exported functions produces no rows silently, an unparseable file is reported as a warning rather than aborting the scan. Also fixed a real bug found by running it against PathKit's own compiled `dist/` output: `.d.ts` files were matching the `.ts` filter and producing 22 false-positive "workflows" from ambient declarations — see CLAUDE.md. Library-only, no CLI wiring yet.
+- [ ] **H1** — Promote `describePath` from `coverageReport.ts` (private) to `paths.ts` (exported); extract `cli.ts`'s trace-directory-listing snippet into a shared `listTraceFiles` helper.
+- [ ] **H2** — `classifyCoverage` (one shared percentage/bucket function) and `buildProjectReport`, composing `discoverWorkflows` + `mergeCoverageTraces` + `describePath` into a plain-data pipeline. Library-only, no CLI yet.
+- [ ] **H3** — Plain-text (and `--json`) `pathkit report` CLI command, no color yet.
+- [ ] **H4** — Color support (`isTTY`/`NO_COLOR`/`--no-color`), wired into `report`'s formatter only.
+- [ ] **H5** — `--out`, `--allow-stale`, doc finalization, version bump.
+- [ ] **H6** — Final `demo/` walkthrough + full-suite verification (documentation only, no `src/` changes).
