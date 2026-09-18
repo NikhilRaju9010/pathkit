@@ -105,6 +105,20 @@ describe('mergeCoverageTraces — G8 (Gap 2)', () => {
     );
   });
 
+  it('exposes orderedPaths in the same order enumeratePaths declares them, each tagged with its covered flag', () => {
+    const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
+    const trueIdx = outcomeIdx(filePath, 'simpleIfElse', "if (isHeads)", 'true');
+    writeTraceFile('trace-1.json', filePath, 'simpleIfElse', [trueIdx]);
+
+    const report = mergeCoverageTraces(filePath, 'simpleIfElse', [path.join(traceDir, 'trace-1.json')]);
+
+    expect(report.orderedPaths).toHaveLength(2);
+    expect(report.orderedPaths[0]!.description).toContain('true');
+    expect(report.orderedPaths[0]!.covered).toBe(true);
+    expect(report.orderedPaths[1]!.description).toContain('false');
+    expect(report.orderedPaths[1]!.covered).toBe(false);
+  });
+
   it('reports a stale-sourceHash trace as unmatched by default, but matches it when allowStale is set', () => {
     const filePath = path.join(__dirname, 'fixtures', 'm2', 'simple-if-else.ts');
     const trueIdx = outcomeIdx(filePath, 'simpleIfElse', "if (isHeads)", 'true');

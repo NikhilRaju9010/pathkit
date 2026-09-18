@@ -30,6 +30,11 @@ export interface NamedPath {
   description: string;
 }
 
+/** One declared path, in the same order `enumeratePathsWithEdgeIndices` declares it, tagged with whether it was covered. */
+export interface NamedPathWithCoverage extends NamedPath {
+  covered: boolean;
+}
+
 /** A trace file that couldn't be counted as covering any declared path, with why. */
 export interface UnmatchedTrace {
   traceFilePath: string;
@@ -47,6 +52,16 @@ export interface CoverageReport {
   percentage: number;
   coveredPaths: NamedPath[];
   untestedPaths: NamedPath[];
+  /**
+   * Every declared path, in the same order `enumeratePathsWithEdgeIndices`
+   * declares them (not covered-first, as `coveredPaths`/`untestedPaths`
+   * effectively are), each tagged with its own `covered` flag. Added for
+   * Gap 3's `report` command, which needs to render a workflow's paths in
+   * their natural declared order rather than grouped by coverage status —
+   * additive and derived from the same underlying data as `coveredPaths`/
+   * `untestedPaths`, so it can't disagree with them.
+   */
+  orderedPaths: NamedPathWithCoverage[];
   unmatchedTraces: UnmatchedTrace[];
 }
 
@@ -210,16 +225,18 @@ export function mergeCoverageTraces(
     covered.add(matchIndex);
   }
 
-  const toNamedPath = (index: number): NamedPath => ({
-    edgeIndices: declaredPaths[index]!.edgeIndices,
-    description: describePath(graph, declaredPaths[index]!.edgeIndices),
+  const orderedPaths: NamedPathWithCoverage[] = declaredPaths.map((p, index) => ({
+    edgeIndices: p.edgeIndices,
+    description: describePath(graph, p.edgeIndices),
+    covered: covered.has(index),
+  }));
+  const toBareNamedPath = ({ edgeIndices, description }: NamedPathWithCoverage): NamedPath => ({
+    edgeIndices,
+    description,
   });
 
-  const coveredPaths = [...covered].sort((a, b) => a - b).map(toNamedPath);
-  const untestedPaths = declaredPaths
-    .map((_, index) => index)
-    .filter((index) => !covered.has(index))
-    .map(toNamedPath);
+  const coveredPaths = orderedPaths.filter((p) => p.covered).map(toBareNamedPath);
+  const untestedPaths = orderedPaths.filter((p) => !p.covered).map(toBareNamedPath);
 
   const totalPaths = declaredPaths.length;
   return {
@@ -230,6 +247,7 @@ export function mergeCoverageTraces(
     percentage: totalPaths === 0 ? 0 : (covered.size / totalPaths) * 100,
     coveredPaths,
     untestedPaths,
+    orderedPaths,
     unmatchedTraces,
   };
 }
