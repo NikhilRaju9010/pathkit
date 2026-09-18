@@ -4,7 +4,7 @@
 
 ## Project summary
 
-PathKit is a TypeScript CLI tool that statically analyzes a Temporal workflow file, finds every possible execution branch (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, retry loops), builds a graph of every possible path through the workflow, and renders it as a Mermaid diagram. v1 covers this analysis only ("Gap 1" in `temporal-pathkit-idea.md`) and is complete as of M7. Gap 2 — coverage tracking of which paths tests actually exercise, via a new `pathkit coverage` subcommand — is under active development as of milestone G0; see the "Gap 2" section of `PLAN.md` for its milestone checklist.
+PathKit is a TypeScript CLI tool that statically analyzes a Temporal workflow file, finds every possible execution branch (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, retry loops), builds a graph of every possible path through the workflow, and renders it as a Mermaid diagram ("Gap 1" in `temporal-pathkit-idea.md`, complete as of M7). It also auto-instruments a copy of a workflow file to track, at runtime through a real Temporal `TestWorkflowEnvironment`, which of those statically-declared paths a test suite actually exercises, and reports on it via `pathkit coverage` ("Gap 2", complete as of G11 — see the "Gap 2" section of `PLAN.md` for its milestone history). Both gaps' known scope boundaries are documented, consolidated, in `LIMITATIONS.md`.
 
 ## Locked architecture decisions
 
@@ -182,4 +182,20 @@ The live end-to-end check is a plain Node script generated into the consumer pro
 
 `README.md` gained a full worked example (a `beforeAll`/`afterAll`-shared `TestWorkflowEnvironment`, `prepareCoverageRun` wired with `cleanup()` in a `finally` block, and an inline comment repeating the G4 query-hang landmine — a Query issued after `runUntil` resolves hangs forever — directly at the point in the example where it matters, not just in this file). `package.json` bumped `0.3.0` → `0.4.0` per the existing CLI/public-API package-hygiene rule, since this is new public library surface end users import directly.
 
+No new dependency this milestone (G10).
+
+## 2026-09-18 — Gap 2 (G11): final polish, and a real documentation bug caught during the consolidation pass itself
+
+Consolidated every Gap-2-specific limitation (previously spread across two separate, mid-file sections added incrementally at G1, G4, G5, G6, G7, and G8) into one properly organized `LIMITATIONS.md` section, split into three subsections by what a reader actually needs from each part: internal mechanics (mostly relevant only to someone extending PathKit itself — the `outcomeEdgeIndex` fix, `Node`-ref validity, live-test cost), what can actually be instrumented (narrower than what Gap 1 can detect, construct by construct), and coverage-reporting semantics (the `sourceHash` false-positive, the retry-then-succeed collapsing behavior). While consolidating, added three real, previously-undocumented limitations that had never been written down anywhere in the repo despite being true and user-facing since G8/G9/G10: `prepareCoverageRun` only ever tracks one named function per call (no "instrument every export at once" mode), trace files accumulate indefinitely unless `--clean` is used explicitly (no automatic pruning by age), and `pathkit coverage` has no `--min-coverage`-style CI-gating threshold — it is deliberately report-only. `README.md`'s "Coverage tracking" section heading and top-of-file status line were updated to drop "(Gap 2 — in progress)"/"still in progress" framing now that the feature is actually complete, and `CLAUDE.md`'s own project summary was rewritten the same way.
+
+While doing this consolidation pass, found (via a direct `git log --follow -p` check, not by inspection alone) that `PLAN.md`'s own G0 checkbox had been sitting unchecked (`- [ ]`) since the "Gap 2" section was first created — every milestone from G1 through G10 had been checked off individually in its own commit, but G0 itself, despite being the very first Gap 2 milestone completed and committed (`206c4d6`), was never gone back to. Fixed directly as part of this milestone's own PLAN.md finalization pass, rather than treated as a separate fix — exactly the kind of small, easy-to-miss inconsistency a dedicated "final polish" pass exists to catch.
+
+The final manual `demo/` walkthrough ran the real, shipped pipeline end to end, not hand-written trace fixtures: `pathkit analyze demo/report-polling-workflow.ts` (4 total paths), then a throwaway script using the real `prepareCoverageRun`/`recordCoverageTrace` helpers against a live `TestWorkflowEnvironment` + `Worker` to record two genuine executions (mocking `checkReportJobStatus` to return `'complete'` immediately in one run and `'failed'` immediately in the other), then `pathkit coverage demo/report-polling-workflow.ts --traces <dir>` against the two resulting trace files. Result: `2/4 (50.0%)`, correctly naming the "succeeded immediately" and "failed immediately" paths as covered and the "retried then gave up" / "skipped the loop entirely" paths as untested — numbers that visibly make sense against `analyze`'s own path count, exactly the kind of end-to-end sanity check this milestone calls for.
+
+Full verification (`npm run lint && npm run typecheck && npm test && npm run smoke`) ran clean with no code changes in this milestone at all — G11 is documentation and verification only, no `src/` changes.
+
 No new dependency this milestone.
+
+---
+
+**Gap 2 is complete as of G11.** Both pieces of PathKit's originally-planned scope (`temporal-pathkit-idea.md`) are now shipped: Gap 1 (static path/branch analysis, M0–M7) and Gap 2 (workflow path coverage tracking, G0–G11). Any future work on this project starts from a clean, fully-shipped baseline — see `PLAN.md` for the full milestone history and `LIMITATIONS.md` for the consolidated, honest list of what both gaps do and don't cover.

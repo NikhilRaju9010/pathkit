@@ -27,7 +27,7 @@ Two consequential decisions were locked in before any milestone started (full re
 
 Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, no config file); `pathkit coverage` is report-only in this pass (no `--min-coverage` threshold); an unmatched trace is a loud warning, not a hard failure; one `prepareCoverageRun` call tracks exactly one named function per file.
 
-- [ ] **G0** — Dependency placement (`@temporalio/client`/`@temporalio/worker` to devDependencies) and naming conventions (instrumented sibling suffix, trace directory) decided and recorded; no user-visible feature yet.
+- [x] **G0** — Dependency placement (`@temporalio/client`/`@temporalio/worker` to devDependencies) and naming conventions (instrumented sibling suffix, trace directory) decided and recorded; no user-visible feature yet.
 - [x] **G1** — `buildWorkflowGraphWithNodeRefs`: additive graph-to-AST-location mapping in `src/graph.ts`, non-breaking.
 - [x] **G2** — Instrumented sibling copy with unmodified text, unique concurrency-safe filenames, written next to the original file (relative-import landmine).
 - [x] **G3** — Real instrumentation: if/else branches, per-function trace-array state, namespaced Query — verified at the text/AST level only.
@@ -39,6 +39,8 @@ Confirmed defaults: trace files live at `.pathkit/coverage/*.json` (gitignored, 
 - [x] **G8** — Trace file format (with `sourceHash`) + offline merge/matching logic, including multi-loop collapsing, zero-branch, and `maxPaths`-truncation fixtures.
 - [x] **G9** — `pathkit coverage` CLI command (text/`--json` output, `--out`, `--clean`, `--allow-stale`). Version bump (new CLI-facing behavior). Also fixed a real gap in `test/cli.test.ts`'s subprocess harness (`execFileSync` → `spawnSync`), since the old one discarded stderr on a successful exit.
 - [x] **G10** — Developer-facing test-helper API (`prepareCoverageRun`, `recordCoverageTrace`) and extended smoke test proving the dependency-placement decision for real. Version bump (new public API surface). Fixed a smoke-test ordering bug (found before it ever ran) that would have silently failed to catch the exact bug class it was meant to guard against.
-- [ ] **G11** — Final polish: consolidated `LIMITATIONS.md` section, `README.md` "Coverage tracking" section, `demo/` walkthrough, clean full-suite run from a fresh clone.
+- [x] **G11** — Final polish: consolidated `LIMITATIONS.md` section, `README.md` "Coverage tracking" section, `demo/` walkthrough, clean full-suite run from a fresh clone.
+
+**Gap 2 (workflow path coverage tracking) is complete as of G11**, alongside Gap 1's own completion at M7 — both pieces of PathKit's originally-planned scope (`temporal-pathkit-idea.md`) are now shipped. The final `demo/` walkthrough ran `pathkit analyze` (4 total paths for `demo/report-polling-workflow.ts`) followed by two real `prepareCoverageRun`/`recordCoverageTrace` executions through a live `TestWorkflowEnvironment` (one succeeding immediately, one failing immediately) and `pathkit coverage` against the resulting traces, reporting `2/4 (50.0%)` with the correct two paths named as covered and the correct two named as untested.
 
 Full milestone details (files touched, visible result, Definition of Done per milestone) live in the plan document this section mirrors (kept in the Claude Code plan history, `i-want-to-build-sprightly-valiant.md`).

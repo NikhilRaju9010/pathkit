@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then renders the result as a Mermaid diagram.
 
-> **Status:** v0.4.0. Covers static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) — complete. Workflow path **coverage tracking** (which of those paths your tests actually exercise) is now fully working end to end: `prepareCoverageRun`/`recordCoverageTrace` record traces from your own Temporal test suite, and `pathkit coverage` reports on them. Final polish (consolidated docs, a last `demo/` walkthrough) is still in progress — see the "Gap 2" section of [PLAN.md](./PLAN.md) for its milestone roadmap. See [LIMITATIONS.md](./LIMITATIONS.md) for known scope boundaries.
+> **Status:** v0.4.0. Both planned pieces of PathKit are complete: static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops), and workflow path **coverage tracking** (`prepareCoverageRun`/`recordCoverageTrace` record traces from your own Temporal test suite, and `pathkit coverage` reports on them). See [PLAN.md](./PLAN.md) for the full milestone history and [LIMITATIONS.md](./LIMITATIONS.md) for the honest list of known scope boundaries for both.
 
 ## Install
 
@@ -78,7 +78,7 @@ Paste the fenced ` ```mermaid ` block into the [Mermaid Live Editor](https://mer
 
 More example workflows (order processing, a retry/poll loop, a signal-driven approval flow) are in [`demo/`](./demo).
 
-## Coverage tracking (Gap 2 — in progress)
+## Coverage tracking
 
 `pathkit coverage` reports which of a workflow function's statically-declared paths your tests actually exercised, by merging recorded trace files against the same path list `analyze` computes. Two small helper functions — `prepareCoverageRun` and `recordCoverageTrace` — produce those trace files from your own Temporal test suite; see "Recording traces from your own tests" below.
 
@@ -187,7 +187,7 @@ Run this test as part of your normal suite (as many times, across as many test c
 
 ## Supported Temporal SDK version
 
-Developed and tested against `@temporalio/workflow` and `@temporalio/testing` `^1.24.0`.
+Developed and tested against `@temporalio/workflow`, `@temporalio/testing`, `@temporalio/worker`, and `@temporalio/client` `^1.24.0`. None of these are runtime dependencies of the published package — PathKit's own code never imports any of them, and `prepareCoverageRun`/`recordCoverageTrace` work against whatever `@temporalio/*` version your own project already has installed.
 
 ## Scope
 
