@@ -2,10 +2,12 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
 import { CoverageReport, listTraceFiles, mergeCoverageTraces } from './coverageReport';
+import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
 import { DEFAULT_MAX_PATHS, enumeratePaths } from './paths';
+import { buildProjectReport, ProjectReport, WorkflowReportRow } from './reportAggregate';
 
 export interface CliIO {
   stdout: (text: string) => void;
@@ -32,12 +34,16 @@ export function runCli(argv: string[], io: CliIO): number {
   if (command === 'coverage') {
     return runCoverage(rest, io);
   }
+  if (command === 'report') {
+    return runReport(rest, io);
+  }
 
   io.stderr(
     'pathkit: unknown or missing command. Supported:\n' +
       '  --version\n' +
       '  analyze <file> [--out <path>]\n' +
-      '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n',
+      '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
+      '  report <dir> --traces <dir> [--json]\n',
   );
   return 1;
 }
@@ -250,6 +256,108 @@ function parseCoverageArgs(args: string[]): CoverageArgs {
   }
 
   return { filePath: positional[0], tracesDir, functionName, outPath, json, allowStale, clean };
+}
+
+interface ReportArgs {
+  dir: string | undefined;
+  tracesDir: string | undefined;
+  json: boolean;
+}
+
+function runReport(args: string[], io: CliIO): number {
+  const usage = 'Usage: pathkit report <dir> --traces <dir> [--json]\n';
+  const { dir, tracesDir, json } = parseReportArgs(args);
+
+  if (dir === undefined) {
+    io.stderr(`pathkit report: missing <dir> argument. ${usage}`);
+    return 1;
+  }
+  if (tracesDir === undefined) {
+    io.stderr(`pathkit report: missing required --traces <dir> argument. ${usage}`);
+    return 1;
+  }
+
+  let discovered: ReturnType<typeof discoverWorkflows>;
+  try {
+    discovered = discoverWorkflows(dir);
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit report: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+
+  if (discovered.workflows.length === 0) {
+    io.stderr(`pathkit report: no exported workflow functions found under ${dir}.\n`);
+    return 1;
+  }
+
+  let report: ProjectReport;
+  try {
+    report = buildProjectReport(discovered.workflows, tracesDir);
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit report: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+
+  const output = json ? `${JSON.stringify(report, null, 2)}\n` : formatReportText(report);
+  io.stdout(output);
+
+  const warnings = [
+    ...discovered.warnings.map((w) => `  - ${w.filePath}: ${w.error}`),
+    ...report.rows.flatMap((row) => row.unmatchedTraces.map((u) => `  - ${u.traceFilePath}: ${u.reason}`)),
+  ];
+  if (warnings.length > 0) {
+    io.stderr(`pathkit report: ${warnings.length} warning(s):\n${warnings.join('\n')}\n`);
+  }
+
+  return 0;
+}
+
+function formatReportText(report: ProjectReport): string {
+  const rowBlocks = report.rows.map(formatReportRowText);
+  const missedCount = report.totalPaths - report.coveredCount;
+  const totalLine =
+    `${report.totalPaths} paths total · ${report.coveredCount} covered · ` +
+    `${missedCount} missed · ${report.percentage.toFixed(1)}% project coverage`;
+
+  return `${[...rowBlocks, totalLine].join('\n\n')}\n`;
+}
+
+function formatReportRowText(row: WorkflowReportRow): string {
+  const subtotalLine = row.truncated
+    ? `${row.coveredCount}/${row.totalPaths}+ paths (truncated at maxPaths=${DEFAULT_MAX_PATHS}) · ${row.percentage.toFixed(1)}%`
+    : `${row.coveredCount}/${row.totalPaths} paths · ${row.percentage.toFixed(1)}%`;
+
+  const pathLines =
+    row.paths.length > 0
+      ? row.paths.map((p) => `  - ${p.description}: ${p.covered ? 'covered' : 'missed'}`)
+      : ['  (no declared paths)'];
+
+  return [`${row.functionName} (${row.filePath})`, subtotalLine, ...pathLines].join('\n');
+}
+
+function parseReportArgs(args: string[]): ReportArgs {
+  let tracesDir: string | undefined;
+  let json = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--traces') {
+      tracesDir = args[++i];
+    } else if (arg === '--json') {
+      json = true;
+    } else if (arg !== undefined) {
+      positional.push(arg);
+    }
+  }
+
+  return { dir: positional[0], tracesDir, json };
 }
 
 function getPackageVersion(): string {

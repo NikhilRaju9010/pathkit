@@ -175,6 +175,43 @@ describe('reportPollingWorkflow coverage', () => {
 
 Run this test as part of your normal suite (as many times, across as many test cases, as you like — `recordCoverageTrace` always writes a uniquely-named file, so parallel test workers and repeated runs never collide), then run `pathkit coverage` against the same `.pathkit/coverage` directory to see the combined report.
 
+## Combined report (`pathkit report`)
+
+`pathkit coverage` reports on one workflow function at a time. `pathkit report` recursively scans a whole directory for workflow files and combines `analyze`'s path list with `coverage`'s trace matching into one project-wide view: every declared path for every exported workflow function found, each marked covered or missed, with a per-workflow subtotal and a project-wide total.
+
+```bash
+npx pathkit report <dir> --traces <dir> [--json]
+```
+
+- `<dir>` is scanned recursively for `*.ts` files, skipping `node_modules`, `dist`, `build`, `coverage`, and `.git` directories, `.d.ts` declaration files, generated `*.pathkit-instrumented.ts` files, and test files (`*.test.ts`/`*.spec.ts`, or anything under a `__tests__`/`test` directory). Every exported function found in every matched file is treated as one workflow.
+- `--traces <dir>` (required) is the same trace directory `pathkit coverage` reads — one shared directory works for every workflow's traces at once, since each trace file already self-identifies its function.
+- `--json` prints the full aggregated report structure instead of the text format, for scripts/CI.
+- A file that fails to parse, or a trace that can't be matched to any declared path, is reported as a warning on stderr — never silently dropped, and never a hard failure of the whole command.
+
+### Example
+
+Given a small project with two workflow files:
+
+```
+$ npx pathkit report demo/ --traces .pathkit/coverage/
+orderProcessingWorkflow (demo/order-processing-workflow.ts)
+1/3 paths · 33.3%
+  - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --failure--> End: missed
+  - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --success--> End: missed
+  - Start -> if (input.amountCents <= 0) --true--> End: covered
+
+reportPollingWorkflow (demo/report-polling-workflow.ts)
+2/4 paths · 50.0%
+  - Start -> for (...) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --retry--> for (...) --exit--> End: missed
+  - Start -> for (...) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --true--> End: covered
+  - Start -> for (...) --iterate--> if (status === 'complete') --true--> End: covered
+  - Start -> for (...) --exit--> End: missed
+
+7 paths total · 3 covered · 4 missed · 42.9% project coverage
+```
+
+Full path listings can get long for a project with hundreds of paths across many workflows — a `--summary` flag to collapse to workflow-level totals only is a deliberately deferred future addition, not part of this first pass (see [LIMITATIONS.md](./LIMITATIONS.md)).
+
 ## What PathKit detects (v1)
 
 - `if`/`else` branches

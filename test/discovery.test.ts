@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { discoverWorkflows } from '../src/discovery';
+import { PathKitError } from '../src/errors';
 
 const fixtureDir = path.join(__dirname, 'fixtures', 'h0');
 const relativeTo = (absolutePath: string): string => path.relative(process.cwd(), absolutePath);
@@ -68,5 +69,17 @@ describe('discoverWorkflows', () => {
     expect(result.workflows.some((w) => w.filePath.includes(`${path.sep}build${path.sep}`))).toBe(false);
     expect(result.workflows.some((w) => w.filePath.includes(`${path.sep}coverage${path.sep}`))).toBe(false);
     expect(result.workflows.some((w) => w.filePath.includes('.git'))).toBe(false);
+  });
+
+  it('throws a clear PathKitError for a nonexistent directory', () => {
+    const missingDir = path.join(fixtureDir, 'does-not-exist');
+    expect(() => discoverWorkflows(missingDir)).toThrow(PathKitError);
+    expect(() => discoverWorkflows(missingDir)).toThrow(/not found/i);
+  });
+
+  it('throws a clear PathKitError when dir actually points at a file', () => {
+    const aFile = path.join(fixtureDir, 'types.ts');
+    expect(() => discoverWorkflows(aFile)).toThrow(PathKitError);
+    expect(() => discoverWorkflows(aFile)).toThrow(/not a directory/i);
   });
 });

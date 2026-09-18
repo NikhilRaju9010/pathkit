@@ -6,6 +6,15 @@
 npm install
 ```
 
+## Running the CLI locally
+
+```bash
+npm run build
+node bin/pathkit analyze <path-to-workflow-file.ts>
+```
+
+`node bin/pathkit ...` — not `node dist/cli.js ...` — is the only correct way to invoke the CLI from a checkout. `dist/cli.js` (compiled from `src/cli.ts`) only *defines and exports* `runCli`; it has no top-level code that calls it, so running it directly loads the module and exits silently with no output and no error. `bin/pathkit` is the one file that actually calls `runCli(process.argv.slice(2), {...})` and `process.exit`s with its result — this is also what `package.json`'s `"bin"` field points at, so it's exactly what `npx pathkit` runs once the package is installed.
+
 ## Development commands
 
 - `npm test` — run the full Jest test suite (must always run every fixture from every milestone, not a subset)

@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import { parseWorkflowFile } from './parser';
 import { PathKitError } from './errors';
@@ -22,6 +22,13 @@ const TEST_FILE_PATTERN = /\.(test|spec)\.ts$/;
 const SKIP_DIR_NAMES = new Set(['node_modules', '__tests__', 'test', 'dist', 'build', 'coverage', '.git']);
 
 export function discoverWorkflows(dir: string): DiscoveryResult {
+  if (!existsSync(dir)) {
+    throw new PathKitError(`Directory not found: ${dir}`);
+  }
+  if (!statSync(dir).isDirectory()) {
+    throw new PathKitError(`Not a directory: ${dir}`);
+  }
+
   const workflows: DiscoveredWorkflow[] = [];
   const warnings: DiscoverySkipWarning[] = [];
 

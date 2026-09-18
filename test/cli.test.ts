@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { computeSourceHash } from '../src/coverageReport';
+import { buildWorkflowGraphWithNodeRefs } from '../src/graph';
+import { parseWorkflowFile } from '../src/parser';
 
 const BIN_PATH = path.join(__dirname, '..', 'bin', 'pathkit');
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
@@ -188,5 +190,100 @@ describe('bin/pathkit coverage (real subprocess)', () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/could not read traces directory/i);
+  });
+});
+
+describe('bin/pathkit report (real subprocess)', () => {
+  const reportFixturesDir = path.join(FIXTURES_DIR, 'h3');
+  const orderWorkflowFilePath = path.join(reportFixturesDir, 'order-workflow.ts');
+
+  let tracesDir: string;
+
+  beforeEach(() => {
+    tracesDir = mkdtempSync(path.join(tmpdir(), 'pathkit-report-cli-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tracesDir, { recursive: true, force: true });
+  });
+
+  function writeTrace(fileName: string, workflowFilePath: string, functionName: string, rawTrace: string[]): void {
+    const trace = {
+      schemaVersion: 1,
+      workflowFile: workflowFilePath,
+      functionName,
+      sourceHash: computeSourceHash(readFileSync(workflowFilePath, 'utf8')),
+      recordedAt: new Date().toISOString(),
+      rawTrace,
+    };
+    writeFileSync(path.join(tracesDir, fileName), JSON.stringify(trace), 'utf8');
+  }
+
+  function outcomeIdx(filePath: string, functionName: string, decisionLabel: string, outcome: string): string {
+    const fn = parseWorkflowFile(filePath).find((f) => f.name === functionName)!;
+    const { graph, outcomeEdgeIndex } = buildWorkflowGraphWithNodeRefs(fn.node, functionName);
+    const decisionId = graph.nodes.find((n) => n.label === decisionLabel)!.id;
+    const idx = outcomeEdgeIndex.get(`${decisionId}#${outcome}`);
+    if (idx === undefined) throw new Error(`no outcome edge for ${decisionId}#${outcome}`);
+    return String(idx);
+  }
+
+  it('lists every declared path per workflow, marked covered/missed, plus per-workflow and project-wide totals', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+    // pollingWorkflow gets zero traces — fully untested.
+
+    const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('orderWorkflow');
+    expect(result.stdout).toContain('1/2 paths');
+    expect(result.stdout).toContain('50.0%');
+    expect(result.stdout).toContain('covered');
+    expect(result.stdout).toContain('missed');
+    expect(result.stdout).toContain('pollingWorkflow');
+    expect(result.stdout).toContain('0/3 paths');
+    // project-wide total: 1 covered / 5 total (2 + 3) paths
+    expect(result.stdout).toContain('5 paths total');
+    expect(result.stdout).toContain('1 covered');
+    expect(result.stdout).toContain('4 missed');
+    expect(result.stdout).toContain('20.0% project coverage');
+  });
+
+  it('prints the serialized ProjectReport when --json is passed', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+
+    const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--json']);
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { totalPaths: number; coveredCount: number; rows: unknown[] };
+    expect(parsed.totalPaths).toBe(5);
+    expect(parsed.coveredCount).toBe(1);
+    expect(parsed.rows).toHaveLength(2);
+  });
+
+  it('missing <dir> argument prints a clear error and exits non-zero', () => {
+    const result = runCliSubprocess(['report', '--traces', tracesDir]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/missing <dir>/i);
+  });
+
+  it('missing --traces argument prints a clear error and exits non-zero', () => {
+    const result = runCliSubprocess(['report', reportFixturesDir]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/missing required --traces/i);
+  });
+
+  it('a <dir> that is actually a file prints a clear error and exits non-zero', () => {
+    const result = runCliSubprocess(['report', orderWorkflowFilePath, '--traces', tracesDir]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/not a directory/i);
+  });
+
+  it('a nonexistent <dir> prints a clear error and exits non-zero', () => {
+    const result = runCliSubprocess(['report', path.join(reportFixturesDir, 'does-not-exist'), '--traces', tracesDir]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/directory not found/i);
   });
 });
