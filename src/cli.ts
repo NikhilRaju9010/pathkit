@@ -1,6 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
+import { colorize, shouldColorize } from './color';
 import { CoverageReport, listTraceFiles, mergeCoverageTraces } from './coverageReport';
 import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
@@ -12,6 +13,8 @@ import { buildProjectReport, ProjectReport, WorkflowReportRow } from './reportAg
 export interface CliIO {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  /** Whether stdout is a real terminal — used only by `report` to decide whether to colorize. Omit (or leave undefined) for a non-TTY sink (a pipe, a test harness). */
+  isTTY?: boolean;
 }
 
 /**
@@ -43,7 +46,7 @@ export function runCli(argv: string[], io: CliIO): number {
       '  --version\n' +
       '  analyze <file> [--out <path>]\n' +
       '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
-      '  report <dir> --traces <dir> [--json]\n',
+      '  report <dir> --traces <dir> [--json] [--no-color]\n',
   );
   return 1;
 }
@@ -262,11 +265,12 @@ interface ReportArgs {
   dir: string | undefined;
   tracesDir: string | undefined;
   json: boolean;
+  noColor: boolean;
 }
 
 function runReport(args: string[], io: CliIO): number {
-  const usage = 'Usage: pathkit report <dir> --traces <dir> [--json]\n';
-  const { dir, tracesDir, json } = parseReportArgs(args);
+  const usage = 'Usage: pathkit report <dir> --traces <dir> [--json] [--no-color]\n';
+  const { dir, tracesDir, json, noColor } = parseReportArgs(args);
 
   if (dir === undefined) {
     io.stderr(`pathkit report: missing <dir> argument. ${usage}`);
@@ -304,7 +308,8 @@ function runReport(args: string[], io: CliIO): number {
     throw err;
   }
 
-  const output = json ? `${JSON.stringify(report, null, 2)}\n` : formatReportText(report);
+  const colorEnabled = shouldColorize(io.isTTY, noColor);
+  const output = json ? `${JSON.stringify(report, null, 2)}\n` : formatReportText(report, colorEnabled);
   io.stdout(output);
 
   const warnings = [
@@ -318,8 +323,8 @@ function runReport(args: string[], io: CliIO): number {
   return 0;
 }
 
-function formatReportText(report: ProjectReport): string {
-  const rowBlocks = report.rows.map(formatReportRowText);
+function formatReportText(report: ProjectReport, colorEnabled: boolean): string {
+  const rowBlocks = report.rows.map((row) => formatReportRowText(row, colorEnabled));
   const missedCount = report.totalPaths - report.coveredCount;
   const totalLine =
     `${report.totalPaths} paths total · ${report.coveredCount} covered · ` +
@@ -328,14 +333,17 @@ function formatReportText(report: ProjectReport): string {
   return `${[...rowBlocks, totalLine].join('\n\n')}\n`;
 }
 
-function formatReportRowText(row: WorkflowReportRow): string {
+function formatReportRowText(row: WorkflowReportRow, colorEnabled: boolean): string {
   const subtotalLine = row.truncated
     ? `${row.coveredCount}/${row.totalPaths}+ paths (truncated at maxPaths=${DEFAULT_MAX_PATHS}) · ${row.percentage.toFixed(1)}%`
     : `${row.coveredCount}/${row.totalPaths} paths · ${row.percentage.toFixed(1)}%`;
 
   const pathLines =
     row.paths.length > 0
-      ? row.paths.map((p) => `  - ${p.description}: ${p.covered ? 'covered' : 'missed'}`)
+      ? row.paths.map((p) => {
+          const status = colorize(p.covered ? 'covered' : 'missed', p.covered ? 'covered' : 'missed', colorEnabled);
+          return `  - ${p.description}: ${status}`;
+        })
       : ['  (no declared paths)'];
 
   return [`${row.functionName} (${row.filePath})`, subtotalLine, ...pathLines].join('\n');
@@ -344,6 +352,7 @@ function formatReportRowText(row: WorkflowReportRow): string {
 function parseReportArgs(args: string[]): ReportArgs {
   let tracesDir: string | undefined;
   let json = false;
+  let noColor = false;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -352,12 +361,14 @@ function parseReportArgs(args: string[]): ReportArgs {
       tracesDir = args[++i];
     } else if (arg === '--json') {
       json = true;
+    } else if (arg === '--no-color') {
+      noColor = true;
     } else if (arg !== undefined) {
       positional.push(arg);
     }
   }
 
-  return { dir: positional[0], tracesDir, json };
+  return { dir: positional[0], tracesDir, json, noColor };
 }
 
 function getPackageVersion(): string {

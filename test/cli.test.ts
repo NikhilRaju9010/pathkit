@@ -286,4 +286,46 @@ describe('bin/pathkit report (real subprocess)', () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/directory not found/i);
   });
+
+  it('accepts --no-color as a real flag, not mistaking it for <dir> when it comes first', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+
+    const result = runCliSubprocess(['report', '--no-color', reportFixturesDir, '--traces', tracesDir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('covered');
+    expect(result.stdout).toContain('missed');
+  });
+
+  it('a piped (non-TTY) subprocess run never emits raw ANSI escape bytes, --no-color or not', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+
+    const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toMatch(/\[/);
+  });
+
+  it('NO_COLOR env var does not break parsing or output', () => {
+    const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+    writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+
+    const previousNoColor = process.env.NO_COLOR;
+    process.env.NO_COLOR = '1';
+    try {
+      const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('covered');
+      expect(result.stdout).toContain('missed');
+      expect(result.stdout).not.toMatch(/\[/);
+    } finally {
+      if (previousNoColor === undefined) {
+        delete process.env.NO_COLOR;
+      } else {
+        process.env.NO_COLOR = previousNoColor;
+      }
+    }
+  });
 });

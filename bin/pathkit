@@ -6,6 +6,7 @@ const { runCli } = require('../dist/cli');
 const exitCode = runCli(process.argv.slice(2), {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
+  isTTY: process.stdout.isTTY,
 });
 
 process.exit(exitCode);
