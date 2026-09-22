@@ -4,7 +4,7 @@
 
 ## Project summary
 
-PathKit is a TypeScript CLI tool that statically analyzes a Temporal workflow file, finds every possible execution branch (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, retry loops), builds a graph of every possible path through the workflow, and renders it as a Mermaid diagram ("Gap 1" in `temporal-pathkit-idea.md`, complete as of M7). It also auto-instruments a copy of a workflow file to track, at runtime through a real Temporal `TestWorkflowEnvironment`, which of those statically-declared paths a test suite actually exercises, and reports on it via `pathkit coverage` ("Gap 2", complete as of G11 — see the "Gap 2" section of `PLAN.md` for its milestone history). A third command, `pathkit report`, recursively scans a whole project directory and combines Gap 1's path list with Gap 2's coverage matching into one colorized, project-wide view across every workflow found ("Gap 3", complete as of H6 — see the "Gap 3" section of `PLAN.md`). All three gaps' known scope boundaries are documented, consolidated, in `LIMITATIONS.md`.
+PathKit is a TypeScript CLI tool that statically analyzes a Temporal workflow file, finds every possible execution branch (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, retry loops), builds a graph of every possible path through the workflow, and renders it as a numbered plain-text path list by default (or as a Mermaid diagram with `--mermaid`) ("Gap 1" in `temporal-pathkit-idea.md`, complete as of M7). It also auto-instruments a copy of a workflow file to track, at runtime through a real Temporal `TestWorkflowEnvironment`, which of those statically-declared paths a test suite actually exercises, and reports on it via `pathkit coverage` ("Gap 2", complete as of G11 — see the "Gap 2" section of `PLAN.md` for its milestone history). A third command, `pathkit report`, recursively scans a whole project directory and combines Gap 1's path list with Gap 2's coverage matching into one colorized, project-wide view across every workflow found ("Gap 3", complete as of H6 — see the "Gap 3" section of `PLAN.md`). All three gaps' known scope boundaries are documented, consolidated, in `LIMITATIONS.md`.
 
 ## Locked architecture decisions
 
@@ -307,3 +307,17 @@ No new dependency this milestone.
 ---
 
 **Gap 3 is complete as of H6.** All three pieces of PathKit's scope are now shipped: Gap 1 (static path/branch analysis, M0–M7), Gap 2 (workflow path coverage tracking, G0–G11), and Gap 3 (combined multi-file paths + coverage report, H0–H6). Any future work on this project starts from a clean, fully-shipped baseline — see `PLAN.md` for the full milestone history and `LIMITATIONS.md` for the consolidated, honest list of what all three gaps do and don't cover.
+
+---
+
+## 2026-09-22 — `pathkit analyze`'s default output switched from Mermaid to a plain numbered path list, Mermaid moved behind `--mermaid`
+
+`pathkit analyze`'s default terminal output is now a plain, numbered path list — one `  N. Start -> ... -> End` line per declared path, in the same style `pathkit coverage`/`pathkit report` already use — built by calling `enumeratePathsWithEdgeIndices` and reusing the existing `describePath` formatter (`src/paths.ts`) directly, with no new path-formatting logic written. The previous default, a rendered Mermaid `flowchart TD` block, is now only printed when a new `--mermaid` flag is passed; `src/cli.ts`'s `parseAnalyzeArgs` gained a `mermaid: boolean` field alongside the existing `--out`/positional-file parsing, and both `analyze` usage-string occurrences were updated to `[--out <path>] [--mermaid]`. `src/parser.ts`, `src/graph.ts`, and `src/paths.ts` were untouched — this was output formatting only in `src/cli.ts`, plus `test/cli.test.ts` and `README.md` updates.
+
+The one genuinely noteworthy technical fact from the actual implementation: the `--mermaid` branch's output is not merely asserted equal to the old default by a test — it was verified **byte-identical** to the pre-change default output by building the pre-change commit (`0001f4f`) in an isolated checkout, running `pathkit analyze demo/report-polling-workflow.ts` against it, running the current branch's `pathkit analyze demo/report-polling-workflow.ts --mermaid`, and comparing both outputs' SHA-256 checksums directly — both produced the identical digest (`0b2d0a94c4134edc7200feeb4a58d07098a094ee88d6c43c02cddbcb444a81aa`), confirming `--mermaid` is a true byte-for-byte preservation of the old default, not just a structurally-similar reimplementation.
+
+Also fixed as a real, out-of-brief consequence of this change: `scripts/smoke-test.js` had a hardcoded assertion that `pathkit analyze` (no flags) contains `flowchart TD` — exactly the old default this change replaces — which failed the smoke test until split into two checks, one for the new default plain-list output and one, with `--mermaid` explicitly passed, for the Mermaid output.
+
+`package.json`'s version was bumped `0.5.0` → `0.6.0` per the project's existing CLI-facing-change package-hygiene rule (a user-visible default-output change plus a new flag is CLI-facing surface, same class of change as G9/G10/H5's own bumps); `package-lock.json` resynced via `npm install --package-lock-only`.
+
+No new dependency this change.
