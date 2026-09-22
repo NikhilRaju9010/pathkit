@@ -52,12 +52,28 @@ describe('bin/pathkit CLI (real subprocess)', () => {
     expect(result.stderr).toMatch(/no exported workflow functions/i);
   });
 
-  it('a valid file exits 0 with Mermaid output on stdout', () => {
+  it('a valid file exits 0 with a numbered plain-text path list on stdout by default', () => {
     const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm5', 'retry-loop.ts')]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Workflow: retryLoopWorkflow');
-    expect(result.stdout).toContain('flowchart TD');
     expect(result.stdout).toContain('Total paths: 3');
+    expect(result.stdout).toContain(
+      "  1. Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --retry--> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End",
+    );
+    expect(result.stdout).toContain(
+      "  2. Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --true--> End",
+    );
+    expect(result.stdout).toContain('  3. Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End');
+    expect(result.stdout).not.toContain('flowchart TD');
+  });
+
+  it('a valid file with --mermaid exits 0 with Mermaid output on stdout', () => {
+    const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm5', 'retry-loop.ts'), '--mermaid']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow: retryLoopWorkflow');
+    expect(result.stdout).toContain('Total paths: 3');
+    expect(result.stdout).toContain('flowchart TD');
+    expect(result.stdout).not.toContain('  1. Start');
   });
 
   it('writes the report to disk when --out is passed', () => {
@@ -68,7 +84,7 @@ describe('bin/pathkit CLI (real subprocess)', () => {
       expect(result.exitCode).toBe(0);
       const written = readFileSync(outPath, 'utf8');
       expect(written).toContain('Workflow: simpleIfElse');
-      expect(written).toContain('flowchart TD');
+      expect(written).toContain('  1. Start');
       expect(written).toBe(result.stdout);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

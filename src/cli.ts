@@ -7,7 +7,7 @@ import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
-import { DEFAULT_MAX_PATHS, enumeratePaths } from './paths';
+import { DEFAULT_MAX_PATHS, describePath, enumeratePathsWithEdgeIndices } from './paths';
 import { buildProjectReport, ProjectReport, WorkflowReportRow } from './reportAggregate';
 
 export interface CliIO {
@@ -44,7 +44,7 @@ export function runCli(argv: string[], io: CliIO): number {
   io.stderr(
     'pathkit: unknown or missing command. Supported:\n' +
       '  --version\n' +
-      '  analyze <file> [--out <path>]\n' +
+      '  analyze <file> [--out <path>] [--mermaid]\n' +
       '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
       '  report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n',
   );
@@ -52,10 +52,10 @@ export function runCli(argv: string[], io: CliIO): number {
 }
 
 function runAnalyze(args: string[], io: CliIO): number {
-  const { filePath, outPath } = parseAnalyzeArgs(args);
+  const { filePath, outPath, mermaid } = parseAnalyzeArgs(args);
 
   if (filePath === undefined) {
-    io.stderr('pathkit analyze: missing <file> argument. Usage: pathkit analyze <file> [--out <path>]\n');
+    io.stderr('pathkit analyze: missing <file> argument. Usage: pathkit analyze <file> [--out <path>] [--mermaid]\n');
     return 1;
   }
 
@@ -78,13 +78,21 @@ function runAnalyze(args: string[], io: CliIO): number {
   const report = functions
     .map((fn) => {
       const graph = buildWorkflowGraph(fn.node, fn.name);
-      const pathResult = enumeratePaths(graph);
-      const mermaidText = renderMermaid(graph);
+      const pathResult = enumeratePathsWithEdgeIndices(graph);
       const totalPathsLine = pathResult.truncated
         ? `Total paths: ${pathResult.paths.length}+ (truncated at maxPaths=${DEFAULT_MAX_PATHS})`
         : `Total paths: ${pathResult.paths.length}`;
 
-      return `Workflow: ${fn.name}\n${totalPathsLine}\n\n\`\`\`mermaid\n${mermaidText}\n\`\`\`\n`;
+      if (mermaid) {
+        const mermaidText = renderMermaid(graph);
+        return `Workflow: ${fn.name}\n${totalPathsLine}\n\n\`\`\`mermaid\n${mermaidText}\n\`\`\`\n`;
+      }
+
+      const pathLines = pathResult.paths
+        .map((p, i) => `  ${i + 1}. ${describePath(graph, p.edgeIndices)}`)
+        .join('\n');
+
+      return `Workflow: ${fn.name}\n${totalPathsLine}\n\n${pathLines}\n`;
     })
     .join('\n');
 
@@ -97,21 +105,24 @@ function runAnalyze(args: string[], io: CliIO): number {
   return 0;
 }
 
-function parseAnalyzeArgs(args: string[]): { filePath: string | undefined; outPath: string | undefined } {
+function parseAnalyzeArgs(args: string[]): { filePath: string | undefined; outPath: string | undefined; mermaid: boolean } {
   let outPath: string | undefined;
+  let mermaid = false;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--out') {
       outPath = args[i + 1];
       i++;
+    } else if (args[i] === '--mermaid') {
+      mermaid = true;
     } else {
       const value = args[i];
       if (value !== undefined) positional.push(value);
     }
   }
 
-  return { filePath: positional[0], outPath };
+  return { filePath: positional[0], outPath, mermaid };
 }
 
 interface CoverageArgs {

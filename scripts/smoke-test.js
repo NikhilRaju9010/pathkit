@@ -244,8 +244,15 @@ function main() {
 
     console.log('Running `pathkit analyze` on a sample workflow from the installed package...');
     const analyzeOutput = runInstalledCli(binPath, ['analyze', sampleWorkflowPath]);
-    if (!analyzeOutput.includes('flowchart TD')) {
-      throw new SmokeTestFailure('`pathkit analyze` did not print Mermaid output as expected.');
+    if (!analyzeOutput.includes('1. Start')) {
+      throw new SmokeTestFailure('`pathkit analyze` did not print the default plain-text path list as expected.');
+    }
+    console.log('  OK');
+
+    console.log('Running `pathkit analyze --mermaid` on a sample workflow from the installed package...');
+    const analyzeMermaidOutput = runInstalledCli(binPath, ['analyze', sampleWorkflowPath, '--mermaid']);
+    if (!analyzeMermaidOutput.includes('flowchart TD')) {
+      throw new SmokeTestFailure('`pathkit analyze --mermaid` did not print Mermaid output as expected.');
     }
     console.log('  OK');
 
