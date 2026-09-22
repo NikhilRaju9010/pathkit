@@ -23,10 +23,10 @@ This also works for local development: `git clone` the repo and run `npm install
 ## Usage
 
 ```bash
-npx pathkit analyze <path-to-workflow-file.ts> [--out <path>]
+npx pathkit analyze <path-to-workflow-file.ts> [--out <path>] [--mermaid]
 ```
 
-- Prints, for every exported workflow function in the file, its total path count and a Mermaid flowchart diagram of every possible execution path.
+- Prints, for every exported workflow function in the file, its total path count and a numbered list of every possible execution path, in the same `Start -> ... -> End` style `pathkit coverage`/`pathkit report` already use. Pass `--mermaid` to print a Mermaid flowchart diagram instead.
 - `--out <path>` also writes the same report to disk.
 - `pathkit --version` prints the installed version.
 
@@ -57,6 +57,24 @@ export async function reportPollingWorkflow(input: GenerateReportInput): Promise
 
 ```bash
 npx pathkit analyze demo/report-polling-workflow.ts
+```
+
+outputs:
+
+```
+Workflow: reportPollingWorkflow
+Total paths: 4
+
+  1. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --retry--> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --exit--> End
+  2. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --true--> End
+  3. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --true--> End
+  4. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --exit--> End
+```
+
+Pass `--mermaid` to get a Mermaid flowchart diagram instead:
+
+```bash
+npx pathkit analyze demo/report-polling-workflow.ts --mermaid
 ```
 
 outputs:
