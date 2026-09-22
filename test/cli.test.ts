@@ -22,8 +22,8 @@ interface CliResult {
  * successful (exit 0) run. `spawnSync` captures both streams unconditionally
  * regardless of exit code.
  */
-function runCliSubprocess(args: string[]): CliResult {
-  const result = spawnSync(process.execPath, [BIN_PATH, ...args], { encoding: 'utf8' });
+function runCliSubprocess(args: string[], options?: { cwd?: string }): CliResult {
+  const result = spawnSync(process.execPath, [BIN_PATH, ...args], { encoding: 'utf8', cwd: options?.cwd });
   return { exitCode: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -136,6 +136,61 @@ describe('bin/pathkit CLI (real subprocess)', () => {
     const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'i0', 'many-paths.ts'), '--limit', 'nope']);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/invalid --limit value/i);
+  });
+
+  describe('--html', () => {
+    let cwd: string;
+
+    beforeEach(() => {
+      cwd = mkdtempSync(path.join(tmpdir(), 'pathkit-analyze-html-test-'));
+    });
+
+    afterEach(() => {
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it('writes .pathkit/report.html and .pathkit/report-data.json relative to cwd, containing the workflow', () => {
+      const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts'), '--html'], { cwd });
+      expect(result.exitCode).toBe(0);
+
+      const htmlPath = path.join(cwd, '.pathkit', 'report.html');
+      expect(existsSync(htmlPath)).toBe(true);
+      const html = readFileSync(htmlPath, 'utf8');
+      expect(html).toContain('<html');
+      expect(html).toContain('simpleIfElse');
+      expect(html).toContain('Analysis');
+      expect(html).toContain('Coverage');
+
+      const dataPath = path.join(cwd, '.pathkit', 'report-data.json');
+      expect(existsSync(dataPath)).toBe(true);
+      const store = JSON.parse(readFileSync(dataPath, 'utf8')) as { workflows: Record<string, unknown> };
+      expect(Object.keys(store.workflows)).toHaveLength(1);
+    });
+
+    it('a second --html run on a different file leaves the first file\'s entry in the store untouched', () => {
+      runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts'), '--html'], { cwd });
+      const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm2', 'no-branches.ts'), '--html'], { cwd });
+      expect(result.exitCode).toBe(0);
+
+      const dataPath = path.join(cwd, '.pathkit', 'report-data.json');
+      const store = JSON.parse(readFileSync(dataPath, 'utf8')) as { workflows: Record<string, unknown> };
+      expect(Object.keys(store.workflows)).toHaveLength(2);
+
+      const html = readFileSync(path.join(cwd, '.pathkit', 'report.html'), 'utf8');
+      expect(html).toContain('simpleIfElse');
+      expect(html).toContain('noBranches');
+    });
+
+    it('--html <custom-path> writes the HTML there, while the JSON store stays at the fixed .pathkit/ location', () => {
+      const result = runCliSubprocess(
+        ['analyze', path.join(FIXTURES_DIR, 'm2', 'simple-if-else.ts'), '--html', 'out/mine.html'],
+        { cwd },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(path.join(cwd, 'out', 'mine.html'))).toBe(true);
+      expect(existsSync(path.join(cwd, '.pathkit', 'report.html'))).toBe(false);
+      expect(existsSync(path.join(cwd, '.pathkit', 'report-data.json'))).toBe(true);
+    });
   });
 
   it('an unknown/missing command prints a clear error and exits non-zero', () => {
@@ -438,5 +493,42 @@ describe('bin/pathkit report (real subprocess)', () => {
     const lenient = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--allow-stale']);
     expect(lenient.exitCode).toBe(0);
     expect(lenient.stdout).toContain('1/2 paths');
+  });
+
+  describe('--html', () => {
+    let cwd: string;
+
+    beforeEach(() => {
+      cwd = mkdtempSync(path.join(tmpdir(), 'pathkit-report-html-test-'));
+    });
+
+    afterEach(() => {
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it('refreshes both tabs for every discovered workflow and appends one history entry', () => {
+      const trueIdx = outcomeIdx(orderWorkflowFilePath, 'orderWorkflow', 'if (isHeads)', 'true');
+      writeTrace('trace-1.json', orderWorkflowFilePath, 'orderWorkflow', [trueIdx]);
+
+      const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--html'], { cwd });
+      expect(result.exitCode).toBe(0);
+
+      const html = readFileSync(path.join(cwd, '.pathkit', 'report.html'), 'utf8');
+      expect(html).toContain('orderWorkflow');
+      expect(html).toContain('pollingWorkflow');
+      expect(html).toMatch(/High|Medium|Low/);
+      expect(html).toContain('covered');
+      expect(html).toContain('missed');
+
+      const history = JSON.parse(readFileSync(path.join(cwd, '.pathkit', 'report-history.json'), 'utf8')) as unknown[];
+      expect(history).toHaveLength(1);
+    });
+
+    it('composes with --json: both the JSON on stdout and the HTML file are produced', () => {
+      const result = runCliSubprocess(['report', reportFixturesDir, '--traces', tracesDir, '--html', '--json'], { cwd });
+      expect(result.exitCode).toBe(0);
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(existsSync(path.join(cwd, '.pathkit', 'report.html'))).toBe(true);
+    });
   });
 });

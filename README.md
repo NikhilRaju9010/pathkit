@@ -23,13 +23,14 @@ This also works for local development: `git clone` the repo and run `npm install
 ## Usage
 
 ```bash
-npx pathkit analyze <path-to-workflow-file.ts> [--out <path>] [--mermaid] [--summary] [--limit <n>]
+npx pathkit analyze <path-to-workflow-file.ts> [--out <path>] [--mermaid] [--summary] [--limit <n>] [--html [path]]
 ```
 
 - Prints, for every exported workflow function in the file, its total path count and a numbered, evenly-spaced list of every possible execution path, in the same `Start -> ... -> End` style `pathkit coverage`/`pathkit report` already use. Pass `--mermaid` to print a Mermaid flowchart diagram instead.
 - `--summary` skips the per-path list entirely and prints only the workflow name and total path count — useful when you just want the number for a large workflow.
 - `--limit <n>` prints at most `n` path lines, followed by a note showing how many more paths exist. Without `--limit`, every path prints (this is unchanged from before). Passing `--summary` and `--limit` together prints the summary and a stderr warning that `--limit` was ignored, rather than silently dropping it.
 - `--out <path>` writes the same report shown on stdout to disk (respecting `--summary`/`--limit` if passed).
+- `--html [path]` also updates a self-contained, no-server HTML report (default `.pathkit/report.html`, or a custom path if given) with an Analysis tab and a Coverage tab — see "HTML report" below. Only this workflow's own entry is updated; other workflows already in the report are untouched.
 - `pathkit --version` prints the installed version.
 
 ### Example
@@ -243,7 +244,7 @@ Run this test as part of your normal suite (as many times, across as many test c
 `pathkit coverage` reports on one workflow function at a time. `pathkit report` recursively scans a whole directory for workflow files and combines `analyze`'s path list with `coverage`'s trace matching into one project-wide view: every declared path for every exported workflow function found, each marked covered or missed, with a per-workflow subtotal and a project-wide total.
 
 ```bash
-npx pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]
+npx pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale] [--html [path]]
 ```
 
 - `<dir>` is scanned recursively for `*.ts` files, skipping `node_modules`, `dist`, `build`, `coverage`, and `.git` directories, `.d.ts` declaration files, generated `*.pathkit-instrumented.ts` files, and test files (`*.test.ts`/`*.spec.ts`, or anything under a `__tests__`/`test` directory). Every exported function found in every matched file is treated as one workflow.
@@ -252,6 +253,7 @@ npx pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--
 - `--json` prints the full aggregated report structure instead of the text format, for scripts/CI.
 - Individual path lines are colored green (`covered`) / red (`missed`) when stdout is a real terminal. Color is automatically disabled when piped (e.g. `pathkit report ... > out.txt`), when the `NO_COLOR` env var is set to any non-empty value, or when `--no-color` is passed — piped/non-color output always reads as plain text with the literal words "covered"/"missed", never raw ANSI codes. Only individual path lines are colored; per-workflow and project-wide total lines are always plain.
 - `--allow-stale` compares a trace against a workflow's current source even if its recorded `sourceHash` doesn't match, same as `pathkit coverage --allow-stale`.
+- `--html [path]` refreshes the same HTML report `analyze --html` writes to — both its Analysis and Coverage tabs, for every workflow this run discovered — and appends one entry to the report's history trend. See "HTML report" below.
 - A file that fails to parse, or a trace that can't be matched to any declared path, is reported as a warning on stderr — never silently dropped, and never a hard failure of the whole command.
 
 ### Example
@@ -277,6 +279,30 @@ reportPollingWorkflow (demo/report-polling-workflow.ts)
 ```
 
 Full path listings can get long for a project with hundreds of paths across many workflows — a `--summary` flag to collapse to workflow-level totals only is a deliberately deferred future addition, not part of this first pass (see [LIMITATIONS.md](./LIMITATIONS.md)).
+
+## HTML report
+
+Pass `--html` to `analyze` or `report` to also update a self-contained, no-server HTML report at `.pathkit/report.html` (or a custom path with `--html <path>`) — open it directly in a browser (double-click, no server needed; it makes no external requests). It has two tabs:
+
+- **Analysis** — every workflow's numbered declared-path list, the same data `analyze`'s own terminal output shows.
+- **Coverage** — the same numbered paths marked covered/missed, a subtotal, and a High/Medium/Low priority label (`<50%` High, `50–80%` Medium, `>80%` Low), plus a trend of the last up-to-5 `report --html` runs' project-wide coverage.
+
+Path numbers are the same in both tabs for the same workflow, so "path 3" means the same thing whether you're looking at Analysis or Coverage.
+
+The two commands update different scopes of the same report:
+
+- `analyze <file> --html` updates only that file's workflow(s) in the **Analysis** tab. It never touches the Coverage tab or other workflows' entries — a quick single-file check between full `report` runs doesn't invalidate the rest of the report.
+- `report <dir> --traces <dir> --html` is project-wide: it refreshes **both tabs** for every workflow it discovers, and appends one entry to the history trend.
+
+A workflow that's only ever been seen by `analyze --html` (never by a `report --html` run) shows "not yet measured" in the Coverage tab rather than 0% or blank.
+
+Both commands persist their data in `.pathkit/report-data.json` (and `report --html` also updates `.pathkit/report-history.json`) — gitignored, internal state that both commands read and merge into, always at that fixed location even if `--html <path>` points the rendered HTML file itself somewhere else.
+
+```bash
+npx pathkit report demo/ --traces .pathkit/coverage/ --html
+```
+
+writes/updates `.pathkit/report.html` with all of `demo/`'s workflows, covered/missed per path, and a coverage-trend history entry.
 
 ## What PathKit detects (v1)
 

@@ -1,10 +1,23 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
 import { colorize, shouldColorize } from './color';
 import { CoverageReport, listTraceFiles, mergeCoverageTraces } from './coverageReport';
 import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
+import {
+  appendHistory,
+  DATA_STORE_PATH,
+  DEFAULT_HTML_PATH,
+  HISTORY_PATH,
+  mergeAnalysisEntry,
+  mergeReportData,
+  readDataStore,
+  readHistory,
+  renderReportHtml,
+  writeDataStore,
+  writeHistory,
+} from './htmlReport';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
 import { DEFAULT_MAX_PATHS, enumeratePathsWithEdgeIndices } from './paths';
@@ -45,22 +58,23 @@ export function runCli(argv: string[], io: CliIO): number {
   io.stderr(
     'pathkit: unknown or missing command. Supported:\n' +
       '  --version\n' +
-      '  analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>]\n' +
+      '  analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>] [--html [path]]\n' +
       '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
-      '  report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n',
+      '  report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale] [--html [path]]\n',
   );
   return 1;
 }
 
 function runAnalyze(args: string[], io: CliIO): number {
-  const usage = 'Usage: pathkit analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>]\n';
+  const usage = 'Usage: pathkit analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>] [--html [path]]\n';
   let filePath: string | undefined;
   let outPath: string | undefined;
   let mermaid: boolean;
   let summary: boolean;
   let limit: number | undefined;
+  let htmlPath: string | undefined;
   try {
-    ({ filePath, outPath, mermaid, summary, limit } = parseAnalyzeArgs(args));
+    ({ filePath, outPath, mermaid, summary, limit, htmlPath } = parseAnalyzeArgs(args));
   } catch (err) {
     if (err instanceof PathKitError) {
       io.stderr(`pathkit analyze: ${err.message}\n`);
@@ -94,6 +108,8 @@ function runAnalyze(args: string[], io: CliIO): number {
     return 1;
   }
 
+  let htmlStore = htmlPath === undefined ? undefined : readDataStore(DATA_STORE_PATH);
+
   const report = functions
     .map((fn) => {
       const graph = buildWorkflowGraph(fn.node, fn.name);
@@ -101,6 +117,13 @@ function runAnalyze(args: string[], io: CliIO): number {
       const totalPathsLine = pathResult.truncated
         ? `Total paths: ${pathResult.paths.length}+ (truncated at maxPaths=${DEFAULT_MAX_PATHS})`
         : `Total paths: ${pathResult.paths.length}`;
+
+      if (htmlStore !== undefined) {
+        // Always the full, unlimited listing — --html's Analysis tab is
+        // independent of --limit, which only affects this same run's
+        // terminal output, so the two never desync.
+        htmlStore = mergeAnalysisEntry(htmlStore, filePath!, fn.name, buildPathListing(graph, pathResult));
+      }
 
       if (mermaid) {
         const mermaidText = renderMermaid(graph);
@@ -122,7 +145,19 @@ function runAnalyze(args: string[], io: CliIO): number {
     writeFileSync(outPath, report, 'utf8');
   }
 
+  if (htmlStore !== undefined) {
+    writeDataStore(DATA_STORE_PATH, htmlStore);
+    const history = readHistory(HISTORY_PATH);
+    writeHtmlFile(htmlPath!, renderReportHtml(htmlStore, history));
+  }
+
   return 0;
+}
+
+/** Writes the rendered HTML report, creating missing parent directories (a custom `--html <path>` can point anywhere). */
+function writeHtmlFile(htmlPath: string, html: string): void {
+  mkdirSync(dirname(htmlPath), { recursive: true });
+  writeFileSync(htmlPath, html, 'utf8');
 }
 
 /** Renders `buildPathListing`'s structured data as the terminal-ready block — numbering, blank-line spacing, and the "N more paths" note all live here, not in `pathListing.ts`. */
@@ -143,11 +178,13 @@ function parseAnalyzeArgs(args: string[]): {
   mermaid: boolean;
   summary: boolean;
   limit: number | undefined;
+  htmlPath: string | undefined;
 } {
   let outPath: string | undefined;
   let mermaid = false;
   let summary = false;
   let limit: number | undefined;
+  let htmlPath: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -166,13 +203,27 @@ function parseAnalyzeArgs(args: string[]): {
         throw new PathKitError(`invalid --limit value: ${raw ?? '(missing)'}`);
       }
       limit = parsed;
+    } else if (args[i] === '--html') {
+      const next = args[i + 1];
+      // Only consume the next arg as --html's value once the required
+      // positional (<file>) has already been captured — otherwise a bare
+      // path-looking value here is almost certainly that positional
+      // argument itself (e.g. `analyze --html file.ts`), not --html's
+      // value, and swallowing it would silently drop <file> the same way
+      // an unrecognized `--no-color` once silently ate `report`'s <dir>.
+      if (next !== undefined && !next.startsWith('--') && positional.length > 0) {
+        htmlPath = next;
+        i++;
+      } else {
+        htmlPath = DEFAULT_HTML_PATH;
+      }
     } else {
       const value = args[i];
       if (value !== undefined) positional.push(value);
     }
   }
 
-  return { filePath: positional[0], outPath, mermaid, summary, limit };
+  return { filePath: positional[0], outPath, mermaid, summary, limit, htmlPath };
 }
 
 interface CoverageArgs {
@@ -329,11 +380,13 @@ interface ReportArgs {
   json: boolean;
   noColor: boolean;
   allowStale: boolean;
+  htmlPath: string | undefined;
 }
 
 function runReport(args: string[], io: CliIO): number {
-  const usage = 'Usage: pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n';
-  const { dir, tracesDir, outPath, json, noColor, allowStale } = parseReportArgs(args);
+  const usage =
+    'Usage: pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale] [--html [path]]\n';
+  const { dir, tracesDir, outPath, json, noColor, allowStale, htmlPath } = parseReportArgs(args);
 
   if (dir === undefined) {
     io.stderr(`pathkit report: missing <dir> argument. ${usage}`);
@@ -391,6 +444,19 @@ function runReport(args: string[], io: CliIO): number {
     io.stderr(`pathkit report: ${warnings.length} warning(s):\n${warnings.join('\n')}\n`);
   }
 
+  if (htmlPath !== undefined) {
+    const store = mergeReportData(readDataStore(DATA_STORE_PATH), report);
+    writeDataStore(DATA_STORE_PATH, store);
+    const history = appendHistory(readHistory(HISTORY_PATH), {
+      timestamp: new Date().toISOString(),
+      totalPaths: report.totalPaths,
+      coveredCount: report.coveredCount,
+      percentage: report.percentage,
+    });
+    writeHistory(HISTORY_PATH, history);
+    writeHtmlFile(htmlPath, renderReportHtml(store, history));
+  }
+
   return 0;
 }
 
@@ -426,6 +492,7 @@ function parseReportArgs(args: string[]): ReportArgs {
   let json = false;
   let noColor = false;
   let allowStale = false;
+  let htmlPath: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -440,12 +507,24 @@ function parseReportArgs(args: string[]): ReportArgs {
       noColor = true;
     } else if (arg === '--allow-stale') {
       allowStale = true;
+    } else if (arg === '--html') {
+      const next = args[i + 1];
+      // Same guard as analyze's --html parsing: only treat the next arg as
+      // this flag's value once the required <dir> positional is already
+      // captured, so `report --html mydir --traces ...` can't silently eat
+      // <dir> the way an unrecognized `--no-color` once could.
+      if (next !== undefined && !next.startsWith('--') && positional.length > 0) {
+        htmlPath = next;
+        i++;
+      } else {
+        htmlPath = DEFAULT_HTML_PATH;
+      }
     } else if (arg !== undefined) {
       positional.push(arg);
     }
   }
 
-  return { dir: positional[0], tracesDir, outPath, json, noColor, allowStale };
+  return { dir: positional[0], tracesDir, outPath, json, noColor, allowStale, htmlPath };
 }
 
 function getPackageVersion(): string {
