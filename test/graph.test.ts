@@ -180,4 +180,28 @@ describe('buildWorkflowGraph — M5: multiple functions and retry loops', () => 
       ['n1', 'exit', 'n3'],
     ]);
   });
+
+  it('an unlabeled `break` inside a retry loop exits to the loop\'s own "exit" continuation, not a "retry" back-edge', () => {
+    const g = graphOf('m5', 'retry-loop-with-break.ts', 'retryLoopWithBreakWorkflow');
+
+    // n1 = while decision, n2 = if (status === 'interrupted'), n3 = if (interrupted), n4 = end.
+    expect(g.nodes.map((n) => n.kind)).toEqual(['start', 'decision', 'decision', 'decision', 'end']);
+
+    // The `break` branch (n2 true) must NOT produce a second 'retry' edge
+    // back to n1 — it must reach the same node the loop's own 'exit' edge
+    // reaches (n3), merged in alongside it, not collapsed into the back-edge.
+    const retryEdges = g.edges.filter((e) => e.label === 'retry');
+    expect(retryEdges).toHaveLength(1); // only the loop's normal fall-through, not the break too
+    expect(retryEdges[0]).toEqual({ from: 'n2', to: 'n1', label: 'retry' });
+
+    expect(edgeTriples(g)).toEqual([
+      ['n0', '', 'n1'],
+      ['n1', 'iterate', 'n2'],
+      ['n2', 'retry', 'n1'],
+      ['n1', 'exit', 'n3'],
+      ['n2', 'true', 'n3'],
+      ['n3', 'true', 'n4'],
+      ['n3', 'false', 'n4'],
+    ]);
+  });
 });

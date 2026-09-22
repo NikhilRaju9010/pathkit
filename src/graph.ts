@@ -131,6 +131,22 @@ class GraphBuilder {
   private readonly nodes: WorkflowGraphNode[] = [];
   private readonly edges: WorkflowGraphEdge[] = [];
   private readonly terminalEdges: OpenEdge[] = [];
+  /**
+   * A stack of "edges that reached an unlabeled `break` statement," one
+   * frame per loop currently being processed (innermost last). `break` has
+   * no dedicated handling anywhere else in this file, so without this an
+   * `if`'s branch containing only `break` was silently treated as an
+   * ordinary statement with nothing branch-worthy in it — its open edge
+   * fell through unchanged to the end of the loop body and was closed as a
+   * `'retry'` back-edge exactly like a normal fall-through, indistinguishable
+   * from a path that never broke out of the loop at all (see the fixed bug
+   * this stack addresses in the "unlabeled `break` exits the loop" decision
+   * log entry / LIMITATIONS.md). Each `processLoop` call pushes a fresh
+   * frame before walking its own body and pops it after, so a `break` is
+   * only ever captured by its nearest enclosing loop, matching real
+   * JavaScript/TypeScript `break` semantics.
+   */
+  private readonly breakEdgeStack: OpenEdge[][] = [];
   private nextId = 0;
   readonly nodeAstRefs = new Map<string, Node>();
   readonly outcomeEdgeIndex = new Map<string, number>();
@@ -209,6 +225,21 @@ class GraphBuilder {
     }
     if (Node.isReturnStatement(statement) || Node.isThrowStatement(statement)) {
       this.routeToEnd(frontier);
+      return [];
+    }
+    if (Node.isBreakStatement(statement) && statement.getLabel() === undefined && this.breakEdgeStack.length > 0) {
+      // An unlabeled `break` exits the nearest enclosing loop rather than
+      // falling through to the rest of the loop body — capture the current
+      // frontier on that loop's stack frame (merged into its `'exit'` outcome
+      // by `processLoop`) instead of letting it fall through and get closed
+      // as a `'retry'` back-edge like ordinary fall-through would. A labeled
+      // `break` (out of scope) and a bare `break` outside any loop this
+      // builder is tracking both fall through to the default "plain
+      // statement" handling below, unchanged from prior behavior.
+      const currentLoopBreakEdges = this.breakEdgeStack[this.breakEdgeStack.length - 1];
+      if (currentLoopBreakEdges !== undefined) {
+        currentLoopBreakEdges.push(...frontier);
+      }
       return [];
     }
 
@@ -305,14 +336,21 @@ class GraphBuilder {
     if (!isRetryLoop) {
       // A loop with no activity call isn't a "retry loop" in the sense this
       // tool cares about (see LIMITATIONS.md); walked through transparently,
-      // once, with no cycle modeled.
-      return this.processStatements(bodyStatements, frontier);
+      // once, with no cycle modeled. Still push/pop a break-edge frame so an
+      // unlabeled `break` inside it merges back with whatever comes after the
+      // loop, instead of an outer loop (if any) wrongly capturing it.
+      this.breakEdgeStack.push([]);
+      const exit = this.processStatements(bodyStatements, frontier);
+      const breakEdges = this.breakEdgeStack.pop() ?? [];
+      return [...exit, ...breakEdges];
     }
 
     const nodeId = this.createNode('decision', describeLoop(loopStatement), loopStatement);
     this.connectAllTo(frontier, nodeId);
 
+    this.breakEdgeStack.push([]);
     const bodyExit = this.processStatements(bodyStatements, [this.outcomeEdge(nodeId, 'iterate')]);
+    const breakEdges = this.breakEdgeStack.pop() ?? [];
     for (const edge of bodyExit) {
       // Every path that falls through the loop body normally (i.e. didn't
       // already return/throw) goes back to try again — the labeled back-edge
@@ -327,7 +365,11 @@ class GraphBuilder {
       this.addEdge(edge.from, nodeId, 'retry', edge.outcomeKey);
     }
 
-    return [this.outcomeEdge(nodeId, 'exit')];
+    // An unlabeled `break` captured on this loop's stack frame exits the
+    // loop the same way falling out of the loop condition does, so it's
+    // merged with the loop's own `'exit'` outcome edge here rather than
+    // being closed as a `'retry'` back-edge like normal body fall-through.
+    return [this.outcomeEdge(nodeId, 'exit'), ...breakEdges];
   }
 }
 
