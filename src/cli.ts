@@ -7,7 +7,8 @@ import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
 import { renderMermaid } from './mermaid';
 import { ParsedWorkflowFunction, parseWorkflowFile } from './parser';
-import { DEFAULT_MAX_PATHS, describePath, enumeratePathsWithEdgeIndices } from './paths';
+import { DEFAULT_MAX_PATHS, enumeratePathsWithEdgeIndices } from './paths';
+import { AnalyzePathListing, buildPathListing } from './pathListing';
 import { buildProjectReport, ProjectReport, WorkflowReportRow } from './reportAggregate';
 
 export interface CliIO {
@@ -44,7 +45,7 @@ export function runCli(argv: string[], io: CliIO): number {
   io.stderr(
     'pathkit: unknown or missing command. Supported:\n' +
       '  --version\n' +
-      '  analyze <file> [--out <path>] [--mermaid]\n' +
+      '  analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>]\n' +
       '  coverage <file> --traces <dir> [--function <name>] [--out <path>] [--json] [--allow-stale] [--clean]\n' +
       '  report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale]\n',
   );
@@ -52,11 +53,29 @@ export function runCli(argv: string[], io: CliIO): number {
 }
 
 function runAnalyze(args: string[], io: CliIO): number {
-  const { filePath, outPath, mermaid } = parseAnalyzeArgs(args);
+  const usage = 'Usage: pathkit analyze <file> [--out <path>] [--mermaid] [--summary] [--limit <n>]\n';
+  let filePath: string | undefined;
+  let outPath: string | undefined;
+  let mermaid: boolean;
+  let summary: boolean;
+  let limit: number | undefined;
+  try {
+    ({ filePath, outPath, mermaid, summary, limit } = parseAnalyzeArgs(args));
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit analyze: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
 
   if (filePath === undefined) {
-    io.stderr('pathkit analyze: missing <file> argument. Usage: pathkit analyze <file> [--out <path>] [--mermaid]\n');
+    io.stderr(`pathkit analyze: missing <file> argument. ${usage}`);
     return 1;
+  }
+
+  if (summary && limit !== undefined) {
+    io.stderr('pathkit analyze: --limit ignored because --summary was passed.\n');
   }
 
   let functions: ParsedWorkflowFunction[];
@@ -88,11 +107,12 @@ function runAnalyze(args: string[], io: CliIO): number {
         return `Workflow: ${fn.name}\n${totalPathsLine}\n\n\`\`\`mermaid\n${mermaidText}\n\`\`\`\n`;
       }
 
-      const pathLines = pathResult.paths
-        .map((p, i) => `  ${i + 1}. ${describePath(graph, p.edgeIndices)}`)
-        .join('\n');
+      if (summary) {
+        return `Workflow: ${fn.name}\n${totalPathsLine}\n`;
+      }
 
-      return `Workflow: ${fn.name}\n${totalPathsLine}\n\n${pathLines}\n`;
+      const listing = buildPathListing(graph, pathResult, limit);
+      return `Workflow: ${fn.name}\n${totalPathsLine}\n\n${renderPathListingText(listing)}`;
     })
     .join('\n');
 
@@ -105,9 +125,29 @@ function runAnalyze(args: string[], io: CliIO): number {
   return 0;
 }
 
-function parseAnalyzeArgs(args: string[]): { filePath: string | undefined; outPath: string | undefined; mermaid: boolean } {
+/** Renders `buildPathListing`'s structured data as the terminal-ready block — numbering, blank-line spacing, and the "N more paths" note all live here, not in `pathListing.ts`. */
+function renderPathListingText(listing: AnalyzePathListing): string {
+  const lines = listing.entries.map((e) => `  ${e.index}. ${e.description}`).join('\n\n');
+
+  if (listing.omittedByLimit > 0) {
+    const note = `  ... and ${listing.omittedByLimit} more paths (use --summary or increase --limit to see them)`;
+    return lines.length > 0 ? `${lines}\n\n${note}\n` : `${note}\n`;
+  }
+
+  return `${lines}\n`;
+}
+
+function parseAnalyzeArgs(args: string[]): {
+  filePath: string | undefined;
+  outPath: string | undefined;
+  mermaid: boolean;
+  summary: boolean;
+  limit: number | undefined;
+} {
   let outPath: string | undefined;
   let mermaid = false;
+  let summary = false;
+  let limit: number | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -116,13 +156,23 @@ function parseAnalyzeArgs(args: string[]): { filePath: string | undefined; outPa
       i++;
     } else if (args[i] === '--mermaid') {
       mermaid = true;
+    } else if (args[i] === '--summary') {
+      summary = true;
+    } else if (args[i] === '--limit') {
+      const raw = args[i + 1];
+      i++;
+      const parsed = raw === undefined ? NaN : Number(raw);
+      if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+        throw new PathKitError(`invalid --limit value: ${raw ?? '(missing)'}`);
+      }
+      limit = parsed;
     } else {
       const value = args[i];
       if (value !== undefined) positional.push(value);
     }
   }
 
-  return { filePath: positional[0], outPath, mermaid };
+  return { filePath: positional[0], outPath, mermaid, summary, limit };
 }
 
 interface CoverageArgs {

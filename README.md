@@ -23,11 +23,13 @@ This also works for local development: `git clone` the repo and run `npm install
 ## Usage
 
 ```bash
-npx pathkit analyze <path-to-workflow-file.ts> [--out <path>] [--mermaid]
+npx pathkit analyze <path-to-workflow-file.ts> [--out <path>] [--mermaid] [--summary] [--limit <n>]
 ```
 
-- Prints, for every exported workflow function in the file, its total path count and a numbered list of every possible execution path, in the same `Start -> ... -> End` style `pathkit coverage`/`pathkit report` already use. Pass `--mermaid` to print a Mermaid flowchart diagram instead.
-- `--out <path>` also writes the same report to disk.
+- Prints, for every exported workflow function in the file, its total path count and a numbered, evenly-spaced list of every possible execution path, in the same `Start -> ... -> End` style `pathkit coverage`/`pathkit report` already use. Pass `--mermaid` to print a Mermaid flowchart diagram instead.
+- `--summary` skips the per-path list entirely and prints only the workflow name and total path count — useful when you just want the number for a large workflow.
+- `--limit <n>` prints at most `n` path lines, followed by a note showing how many more paths exist. Without `--limit`, every path prints (this is unchanged from before). Passing `--summary` and `--limit` together prints the summary and a stderr warning that `--limit` was ignored, rather than silently dropping it.
+- `--out <path>` writes the same report shown on stdout to disk (respecting `--summary`/`--limit` if passed).
 - `pathkit --version` prints the installed version.
 
 ### Example
@@ -66,9 +68,44 @@ Workflow: reportPollingWorkflow
 Total paths: 4
 
   1. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --retry--> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --exit--> End
+
   2. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --true--> End
+
   3. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --true--> End
+
   4. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --exit--> End
+```
+
+Pass `--summary` for just the count, useful on a large workflow:
+
+```bash
+npx pathkit analyze demo/report-polling-workflow.ts --summary
+```
+
+outputs:
+
+```
+Workflow: reportPollingWorkflow
+Total paths: 4
+```
+
+Pass `--limit <n>` to cap how many path lines print:
+
+```bash
+npx pathkit analyze demo/report-polling-workflow.ts --limit 2
+```
+
+outputs:
+
+```
+Workflow: reportPollingWorkflow
+Total paths: 4
+
+  1. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --retry--> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --exit--> End
+
+  2. Start -> for (let attempt = 1; attempt <= input.maxPollAttempts; attempt++) --iterate--> if (status === 'complete') --false--> if (status === 'failed') --true--> End
+
+  ... and 2 more paths (use --summary or increase --limit to see them)
 ```
 
 Pass `--mermaid` to get a Mermaid flowchart diagram instead:

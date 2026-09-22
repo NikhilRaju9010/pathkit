@@ -91,6 +91,53 @@ describe('bin/pathkit CLI (real subprocess)', () => {
     }
   });
 
+  it('--summary prints only the workflow name and total path count, no per-path list', () => {
+    const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'm5', 'retry-loop.ts'), '--summary']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow: retryLoopWorkflow');
+    expect(result.stdout).toContain('Total paths: 3');
+    expect(result.stdout).not.toContain('Start ->');
+    expect(result.stdout).not.toContain('1.');
+  });
+
+  it('--limit caps how many path lines print and shows a note with the omitted count', () => {
+    const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'i0', 'many-paths.ts'), '--limit', '3']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Total paths: 8');
+    expect(result.stdout).toContain('  1. Start');
+    expect(result.stdout).toContain('  2. Start');
+    expect(result.stdout).toContain('  3. Start');
+    expect(result.stdout).not.toContain('  4. Start');
+    expect(result.stdout).toContain('... and 5 more paths (use --summary or increase --limit to see them)');
+  });
+
+  it('--limit greater than or equal to the total path count prints every path with no omission note', () => {
+    const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'i0', 'many-paths.ts'), '--limit', '100']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('  8. Start');
+    expect(result.stdout).not.toContain('more paths');
+  });
+
+  it('--summary and --limit together prints the summary and warns on stderr that --limit was ignored', () => {
+    const result = runCliSubprocess([
+      'analyze',
+      path.join(FIXTURES_DIR, 'i0', 'many-paths.ts'),
+      '--summary',
+      '--limit',
+      '3',
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Total paths: 8');
+    expect(result.stdout).not.toContain('Start ->');
+    expect(result.stderr).toMatch(/--limit ignored because --summary was passed/i);
+  });
+
+  it('an invalid --limit value prints a clear error and exits non-zero', () => {
+    const result = runCliSubprocess(['analyze', path.join(FIXTURES_DIR, 'i0', 'many-paths.ts'), '--limit', 'nope']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/invalid --limit value/i);
+  });
+
   it('an unknown/missing command prints a clear error and exits non-zero', () => {
     const result = runCliSubprocess([]);
     expect(result.exitCode).not.toBe(0);
