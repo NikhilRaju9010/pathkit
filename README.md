@@ -4,7 +4,7 @@ Static path/branch graph analysis for Temporal TypeScript workflows.
 
 PathKit parses a Temporal workflow file and maps every possible way it can execute — success, failure, retry, timeout, and signal branches — then prints the result as a numbered plain-text path list, or as a Mermaid diagram with `--mermaid`.
 
-> **Status:** v0.4.0. Both planned pieces of PathKit are complete: static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops), and workflow path **coverage tracking** (`prepareCoverageRun`/`recordCoverageTrace` record traces from your own Temporal test suite, and `pathkit coverage` reports on them). See [PLAN.md](./PLAN.md) for the full milestone history and [LIMITATIONS.md](./LIMITATIONS.md) for the honest list of known scope boundaries for both.
+> **Status:** v0.9.0. All three planned pieces of PathKit are complete: static path/branch analysis for a single workflow file (if/else, try/catch around activities, `Promise.race` timeouts, `condition()` signal-waits, and retry loops) via `pathkit analyze`; workflow path **coverage tracking** (`prepareCoverageRun`/`recordCoverageTrace` record traces from your own Temporal test suite, and `pathkit coverage` reports on them); and a project-wide **combined report** (`pathkit report`) that scans a whole directory and marks every declared path covered or missed. `analyze` and `report` can also write a self-contained HTML report with `--html`, and `report` can read its arguments from a `.pathkitrc.json` project config file. See [PLAN.md](./PLAN.md) for the full milestone history and [LIMITATIONS.md](./LIMITATIONS.md) for the honest list of known scope boundaries.
 
 ## Install
 
@@ -258,10 +258,15 @@ npx pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--
 
 ### Example
 
-Given a small project with two workflow files:
+Given a project with three workflow files (this is `demo/`, with traces recorded from four real test runs against a live Temporal test server; the long `for (...)` conditions are abbreviated here):
 
 ```
 $ npx pathkit report demo/ --traces .pathkit/coverage/
+approvalSignalWorkflow (demo/approval-signal-workflow.ts)
+1/2 paths · 50.0%
+  - Start -> condition() --signaled--> if (denied) --true--> End: covered
+  - Start -> condition() --signaled--> if (denied) --false--> End: missed
+
 orderProcessingWorkflow (demo/order-processing-workflow.ts)
 1/3 paths · 33.3%
   - Start -> if (input.amountCents <= 0) --false--> try/catch (activity) --failure--> End: missed
@@ -275,10 +280,10 @@ reportPollingWorkflow (demo/report-polling-workflow.ts)
   - Start -> for (...) --iterate--> if (status === 'complete') --true--> End: covered
   - Start -> for (...) --exit--> End: missed
 
-7 paths total · 3 covered · 4 missed · 42.9% project coverage
+9 paths total · 4 covered · 5 missed · 44.4% project coverage
 ```
 
-Full path listings can get long for a project with hundreds of paths across many workflows — a `--summary` flag to collapse to workflow-level totals only is a deliberately deferred future addition, not part of this first pass (see [LIMITATIONS.md](./LIMITATIONS.md)).
+Full path listings can get long for a project with hundreds of paths across many workflows. `pathkit analyze` already has `--summary` and `--limit` (see above), but **`pathkit report` has neither yet** — a `report --summary` flag to collapse to workflow-level totals only is a deliberately deferred future addition (see [LIMITATIONS.md](./LIMITATIONS.md)).
 
 ### Project config file (`.pathkitrc.json`)
 
