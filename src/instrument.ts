@@ -552,7 +552,19 @@ function scaffoldEdits(sourceFile: SourceFile, traceVarName: string, queryVarNam
           `(e.g. a bare \`import '${TEMPORAL_WORKFLOW_MODULE}'\`), which isn't supported yet.`,
       );
     }
-    const pos = namedBindings.getEnd() - 1; // right before the closing `}`
+    // Insert right after the LAST element's own text (e.g. right after
+    // `setHandler`), not right before the closing `}`. A multi-line named
+    // import list formatted with a trailing comma before `}` — the default
+    // Prettier style, and what this project's own workflow files use — has
+    // that comma sitting between the last element and `}`; inserting before
+    // `}` would land after that comma and produce a leading-comma syntax
+    // error (`setHandler,\n, defineQuery}`). Inserting right after the last
+    // element's identifier is correct either way: with a trailing comma it
+    // becomes `setHandler, defineQuery,\n}`, and without one it becomes
+    // `{ setHandler, defineQuery }` — both valid.
+    const elements = namedBindings.getElements();
+    const lastElement = elements[elements.length - 1];
+    const pos = lastElement === undefined ? namedBindings.getEnd() - 1 : lastElement.getEnd();
     edits.push({ start: pos, end: pos, text: `, ${missingNames.join(', ')}` });
   }
 

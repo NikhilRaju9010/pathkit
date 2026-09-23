@@ -139,6 +139,31 @@ describe('writeInstrumentedCopy — G3 real if/else instrumentation (Gap 2)', ()
     }
   });
 
+  it('merges into a multi-line named import that ends with a trailing comma before `}` (the default Prettier style) without producing a leading-comma syntax error', () => {
+    const { instrumentedText, cleanup } = instrumentAndRead('g3', 'if-with-trailing-comma-import.ts', 'ifWithTrailingCommaImport');
+    try {
+      assertSyntacticallyValid(instrumentedText);
+      const importLines = instrumentedText.split('\n').filter((line) => line.includes("from '@temporalio/workflow'"));
+      expect(importLines).toHaveLength(1);
+      // The merged names must land right after the last existing element
+      // (`proxyActivities`), not after its trailing comma — a `, defineQuery`
+      // inserted right before the closing `}` in this format would produce
+      // `proxyActivities,\n, defineQuery}`, a syntax error caught by
+      // `assertSyntacticallyValid` above; this asserts the specific shape
+      // that must NOT appear.
+      expect(instrumentedText).not.toMatch(/,\s*\n\s*,\s*(defineQuery|setHandler)/);
+      expect(instrumentedText).toContain('CancellationScope');
+      expect(instrumentedText).toContain('isCancellation');
+      expect(instrumentedText).toContain('proxyActivities');
+      expect(instrumentedText).toContain('defineQuery');
+      expect(instrumentedText).toContain('setHandler');
+      // The original activity proxy binding must be untouched.
+      expect(instrumentedText).toContain('const { doWork } = proxyActivities<{ doWork(): Promise<string> }>({');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('a function with no branches at all still gets scaffolding but no push calls', () => {
     const { instrumentedText, cleanup } = instrumentAndRead('g2', 'workflow-with-import.ts', 'usesHelper');
     try {
