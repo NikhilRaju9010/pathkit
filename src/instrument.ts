@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import { CallExpression, Node, SourceFile, Statement } from 'ts-morph';
+import { Block, CallExpression, Node, SourceFile, Statement } from 'ts-morph';
 import { PathKitError } from './errors';
 import { buildWorkflowGraphWithNodeRefs, WorkflowGraph, WorkflowGraphNode } from './graph';
 import { parseWorkflowFile, WorkflowFunctionNode } from './parser';
@@ -292,7 +292,7 @@ function tryCatchEdits(
     const failureIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'failure');
 
     const tryBlock = astNode.getTryBlock();
-    const successPos = tryBlock.getEnd() - 1; // right before the try block's closing `}`
+    const successPos = successPushPosition(tryBlock);
     edits.push({ start: successPos, end: successPos, text: `${pushStatement(traceVarName, successIdx)} ` });
 
     const catchBlock = catchClause.getBlock();
@@ -301,6 +301,34 @@ function tryCatchEdits(
   }
 
   return edits;
+}
+
+/**
+ * A `try` block whose last statement is a `return` (e.g. the common
+ * `try { return await someActivity(); } catch (err) { ... }` shape) exits
+ * the enclosing function from inside that statement — anything textually
+ * after it in the same block is unreachable dead code. Inserting the
+ * success push at `tryBlock.getEnd() - 1` (right before the closing `}`)
+ * in that case produces exactly that: a push call that is syntactically
+ * present but never actually executes, so `pathkit coverage` permanently
+ * shows this try/catch's "success" outcome as `missed` no matter how many
+ * times a real test exercises it (found piloting coverage tracking
+ * against a real project's `paymentProcessingWorkflow`, whose only
+ * top-level statement inside its outer try is exactly this pattern — see
+ * LIMITATIONS.md). The fix is to insert the push immediately before that
+ * trailing `return` instead of after it, so it executes right before the
+ * function actually returns. Any other trailing statement shape (a plain
+ * expression statement, an if/loop, etc.) is unaffected and keeps using
+ * the position right before the closing `}`, since falling off the end of
+ * the try block normally in those cases is exactly what "success" means.
+ */
+function successPushPosition(tryBlock: Block): number {
+  const statements = tryBlock.getStatements();
+  const lastStatement = statements[statements.length - 1];
+  if (lastStatement !== undefined && Node.isReturnStatement(lastStatement)) {
+    return lastStatement.getStart();
+  }
+  return tryBlock.getEnd() - 1; // right before the try block's closing `}`
 }
 
 /**

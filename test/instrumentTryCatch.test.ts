@@ -62,6 +62,32 @@ describe('writeInstrumentedCopy — G5 real try/catch-around-activity instrument
     }
   });
 
+  it('inserts the success push before a trailing `return`, not after it, so the push is actually reachable', () => {
+    const { instrumentedText, cleanup } = instrumentAndRead('m3', 'try-catch-trailing-return.ts', 'chargeCardReturningDirectlyWorkflow');
+    try {
+      assertSyntacticallyValid(instrumentedText);
+
+      const filePath = path.join(__dirname, 'fixtures', 'm3', 'try-catch-trailing-return.ts');
+      const fn = parseWorkflowFile(filePath).find((f) => f.name === 'chargeCardReturningDirectlyWorkflow')!;
+      const graph = buildWorkflowGraph(fn.node, 'chargeCardReturningDirectlyWorkflow');
+      const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
+      const successIdx = graph.edges.findIndex((e) => e.from === decisionId && e.label === 'success');
+
+      const successPushText = `__pathkitTrace__chargeCardReturningDirectlyWorkflow.push('${successIdx}');`;
+      const successPushPos = instrumentedText.indexOf(successPushText);
+      const returnPos = instrumentedText.indexOf('return await chargeCard(accountId);');
+
+      expect(successPushPos).toBeGreaterThan(-1);
+      // The push must come BEFORE the return, not after it — inserted
+      // after, it would be unreachable dead code and this try's "success"
+      // outcome would never actually get recorded by a real test run.
+      expect(successPushPos).toBeLessThan(returnPos);
+      expect(instrumentedText).toContain(`${successPushText} return await chargeCard(accountId);`);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('does not instrument a try/catch that is not recognized as wrapping an activity call', () => {
     const { instrumentedText, cleanup } = instrumentAndRead('m3', 'try-catch-non-activity.ts', 'parseInputWorkflow');
     try {
