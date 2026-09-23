@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "workflowFile": "test/fixtures/h3/order-workflow.ts",
+  "functionName": "orderWorkflow",
+  "sourceHash": "12e9e1dce62d4966705da89044b0550fe5bc2d06e47057677feec8c0b7ae9a9b",
+  "recordedAt": "2026-01-01T00:00:00.000Z",
+  "rawTrace": [
+    "1"
+  ]
+}

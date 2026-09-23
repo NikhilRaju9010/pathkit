@@ -1,0 +1,1 @@
+pathkit report: could not read traces directory test/fixtures/k0/nope: ENOENT: no such file or directory, scandir 'test/fixtures/k0/nope'

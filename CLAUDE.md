@@ -354,3 +354,19 @@ Wiring `--html [path]` into `parseAnalyzeArgs`/`parseReportArgs` surfaced a seco
 `package.json` bumped `0.7.0` → `0.8.0` per the existing CLI-facing-change package-hygiene rule (two new `--html` flags); `package-lock.json` resynced via `npm install --package-lock-only`.
 
 No new dependency this milestone.
+
+## 2026-09-23 — Milestone K: `.pathkitrc.json` project config for `report`, with a spec conflict resolved by the zero-config constraint
+
+`pathkit report` can now take its arguments from a `.pathkitrc.json` in the exact current working directory (no upward search), with **CLI flag > config value > built-in default** precedence. `src/config.ts`'s `loadConfig(cwd, onWarning)` parses and validates it; `src/workflowFilter.ts`'s `filterWorkflows` applies `include`-then-`exclude` by exact, case-sensitive file basename (no globs, no path or function-name matching, so the project keeps its single runtime dependency, `ts-morph`). `cli.ts` merges config into the parsed flags in `mergeReportConfig` *before* the existing required-argument checks, so the "missing `<dir>`" and "missing `--traces`" errors only disappear when the config genuinely supplies the value. `analyze` and `coverage` are untouched.
+
+**Schema scope: full coverage, not narrow.** One key per existing `report` flag plus `workflowsDir` for the positional `<dir>`, rather than only the two or three keys that motivated the milestone — so any invocation can be captured in config, with no second "which flags are configurable" rule to learn.
+
+**Three error-handling decisions from the spec, plus one addition:** malformed JSON throws a `PathKitError` naming the file (never a silent fallback to defaults); an unknown top-level key warns on stderr and continues (the same "flag silently swallowed" bug class fixed earlier for `--no-color` and `--html`, now covering typos like `"tracse"`); an `include`/`exclude` entry matching nothing warns on stderr and continues. Added with user approval: a *known* key with the wrong type (e.g. `include` not an array of strings) also throws a `PathKitError`, on the same "never hide a real mistake" principle. `out: null` is treated as unset. `loadConfig`'s `onWarning` defaults to a no-op so the module stays CLI-agnostic — which means `runReport` must pass a real stderr writer, and does; a test asserts an unknown-key warning actually reaches stderr.
+
+**A genuine conflict inside the spec, resolved with the user:** the spec said both "update `report`'s usage string with the new flags" and "identical required-flag errors" with no config. Those two errors embed the usage string, so appending `--include`/`--exclude` to it changed their text — caught by the zero-config golden tests on the first run, not by inspection. The user chose to keep the errors byte-identical: the usage string inside them is unchanged, and the new flags are documented in `README.md` and `LIMITATIONS.md` only.
+
+**Zero-config verification was against pre-change golden output, not re-derived.** `test/fixtures/k0/golden/` holds stdout/stderr/exit code for six `report` invocations (text, `--json`, missing `--traces`, missing `<dir>`, nonexistent dir, unreadable traces dir), captured from the build *before* any `cli.ts` change and compared byte-for-byte by `test/cli.test.ts`. Separately, the real Ameriprise workflows directory (376 + 1522 + 1 paths across three workflows) was run before and after with no `.pathkitrc.json` present and produced identical stdout, stderr and exit code (SHA-256 `937e4eb0…`); the evidence lives in the project's gitignored `.pathkit/k-verification/`, left in place deliberately.
+
+`package.json` bumped `0.8.0` → `0.9.0` (new CLI-facing flags and config file); `package-lock.json` resynced.
+
+No new dependency this milestone.

@@ -280,6 +280,62 @@ reportPollingWorkflow (demo/report-polling-workflow.ts)
 
 Full path listings can get long for a project with hundreds of paths across many workflows — a `--summary` flag to collapse to workflow-level totals only is a deliberately deferred future addition, not part of this first pass (see [LIMITATIONS.md](./LIMITATIONS.md)).
 
+### Project config file (`.pathkitrc.json`)
+
+Instead of retyping the same flags on every `pathkit report` run, put them in a `.pathkitrc.json` in the directory you run the command from. It is read from the exact current working directory only — parent directories are never searched. With no config file present, `report` behaves exactly as it always has.
+
+| Key | Type | Equivalent flag |
+| --- | --- | --- |
+| `workflowsDir` | string | the positional `<dir>` |
+| `traces` | string | `--traces <dir>` |
+| `out` | string or `null` | `--out <path>` |
+| `json` | boolean | `--json` |
+| `noColor` | boolean | `--no-color` |
+| `allowStale` | boolean | `--allow-stale` |
+| `html` | `true`, `false`, or a path string | `--html [path]` |
+| `include` | array of file basenames | `--include a.ts,b.ts` |
+| `exclude` | array of file basenames | `--exclude a.ts,b.ts` |
+
+All keys are optional; an empty file is the same as no file. **Precedence is CLI flag > config value > built-in default**, for every field including `<dir>` and `--traces`. The "missing `<dir>`" / "missing `--traces`" errors still appear unless the config genuinely supplies the value. Relative paths in the config resolve against the current working directory.
+
+`include`/`exclude` (also available directly as comma-separated `--include`/`--exclude` flags) match a workflow file's **basename**, exactly and case-sensitively — not a full path, glob, or function name. `include` is applied first, then `exclude`.
+
+- Malformed JSON, a non-object top level, or a wrong-typed value is an error naming `.pathkitrc.json` — PathKit never silently falls back to defaults on a broken file.
+- An unknown key (e.g. a `"tracse"` typo) prints a warning on stderr and the run continues.
+- An `include`/`exclude` entry that matches no discovered file prints a warning on stderr and the run continues.
+
+Example, run from a scratch directory containing:
+
+```json
+{
+  "workflowsDir": "/path/to/project/packages/worker/src/workflows",
+  "traces": "/path/to/project/.pathkit/coverage",
+  "noColor": true,
+  "include": ["accountTransfer.workflow.ts", "advisorTransition.workflow.ts", "ghost.workflow.ts"]
+}
+```
+
+```
+$ npx pathkit report
+accountTransferWorkflow (.../workflows/accountTransfer.workflow.ts)
+0/376 paths · 0.0%
+  ...
+
+advisorTransitionWorkflow (.../workflows/advisorTransition.workflow.ts)
+1/1 paths · 100.0%
+  ...
+
+377 paths total · 1 covered · 376 missed · 0.3% project coverage
+pathkit report: --include/--exclude entry "ghost.workflow.ts" matched no discovered workflow file.   (stderr)
+
+$ npx pathkit report --include newBrokerageAccount.workflow.ts     # CLI beats the config's include
+newBrokerageAccountWorkflow (.../workflows/newBrokerageAccount.workflow.ts)
+0/1522 paths · 0.0%
+  ...
+```
+
+The config applies to `report` only — `analyze` and `coverage` name their file on the command line and ignore it.
+
 ## HTML report
 
 Pass `--html` to `analyze` or `report` to also update a self-contained, no-server HTML report at `.pathkit/report.html` (or a custom path with `--html <path>`) — open it directly in a browser (double-click, no server needed; it makes no external requests). It has two tabs:

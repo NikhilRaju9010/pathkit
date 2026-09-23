@@ -1,0 +1,12 @@
+orderWorkflow (test/fixtures/h3/order-workflow.ts)
+1/2 paths · 50.0%
+  - Start -> if (isHeads) --true--> End: covered
+  - Start -> if (isHeads) --false--> End: missed
+
+pollingWorkflow (test/fixtures/h3/polling-workflow.ts)
+0/3 paths · 0.0%
+  - Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --retry--> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End: missed
+  - Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --true--> End: missed
+  - Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End: missed
+
+5 paths total · 1 covered · 4 missed · 20.0% project coverage

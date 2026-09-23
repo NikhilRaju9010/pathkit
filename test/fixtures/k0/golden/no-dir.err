@@ -1,0 +1,1 @@
+pathkit report: missing <dir> argument. Usage: pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale] [--html [path]]

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { computeSourceHash } from '../src/coverageReport';
@@ -530,5 +530,175 @@ describe('bin/pathkit report (real subprocess)', () => {
       expect(() => JSON.parse(result.stdout)).not.toThrow();
       expect(existsSync(path.join(cwd, '.pathkit', 'report.html'))).toBe(true);
     });
+  });
+});
+
+describe('bin/pathkit report — .pathkitrc.json (Milestone K, real subprocess)', () => {
+  const repoRoot = path.join(__dirname, '..');
+  const h3Dir = path.join(FIXTURES_DIR, 'h3');
+  const k0TracesDir = path.join(FIXTURES_DIR, 'k0', 'traces');
+  const goldenDir = path.join(FIXTURES_DIR, 'k0', 'golden');
+
+  let cwd: string;
+  beforeEach(() => {
+    cwd = mkdtempSync(path.join(tmpdir(), 'pathkit-rc-test-'));
+  });
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  const writeRc = (config: unknown): void =>
+    writeFileSync(path.join(cwd, '.pathkitrc.json'), typeof config === 'string' ? config : JSON.stringify(config));
+
+  describe('zero-config regression: byte-identical to pre-milestone output', () => {
+    // Golden files in test/fixtures/k0/golden/ were captured from the build
+    // *before* any Milestone K change to src/cli.ts, run from the repo root.
+    const cases: Array<[string, string[]]> = [
+      ['text', ['report', 'test/fixtures/h3', '--traces', 'test/fixtures/k0/traces']],
+      ['json', ['report', 'test/fixtures/h3', '--traces', 'test/fixtures/k0/traces', '--json']],
+      ['no-traces', ['report', 'test/fixtures/h3']],
+      ['no-dir', ['report', '--traces', 'test/fixtures/k0/traces']],
+      ['bad-dir', ['report', 'test/fixtures/does-not-exist', '--traces', 'test/fixtures/k0/traces']],
+      ['bad-traces', ['report', 'test/fixtures/h3', '--traces', 'test/fixtures/k0/nope']],
+    ];
+
+    it('runs in a directory with no .pathkitrc.json', () => {
+      expect(existsSync(path.join(repoRoot, '.pathkitrc.json'))).toBe(false);
+    });
+
+    it.each(cases)('%s: stdout, stderr and exit code match the golden files exactly', (name, args) => {
+      const result = runCliSubprocess(args, { cwd: repoRoot });
+      expect(result.stdout).toBe(readFileSync(path.join(goldenDir, `${name}.out`), 'utf8'));
+      expect(result.stderr).toBe(readFileSync(path.join(goldenDir, `${name}.err`), 'utf8'));
+      expect(result.exitCode).toBe(Number(readFileSync(path.join(goldenDir, `${name}.exit`), 'utf8').trim()));
+    });
+  });
+
+  it('a bare `pathkit report` picks up workflowsDir and traces from the config', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir });
+    const result = runCliSubprocess(['report'], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('5 paths total · 1 covered · 4 missed · 20.0% project coverage');
+  });
+
+  it('a CLI --traces flag overrides the config value', () => {
+    writeRc({ workflowsDir: h3Dir, traces: path.join(cwd, 'does-not-exist') });
+    const result = runCliSubprocess(['report', '--traces', k0TracesDir], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('1 covered');
+  });
+
+  it('a CLI positional <dir> overrides the config workflowsDir', () => {
+    writeRc({ workflowsDir: path.join(cwd, 'does-not-exist'), traces: k0TracesDir });
+    const result = runCliSubprocess(['report', h3Dir], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('5 paths total');
+  });
+
+  it('config supplying only one of the required values still yields the existing missing-argument error', () => {
+    writeRc({ workflowsDir: h3Dir });
+    const noTraces = runCliSubprocess(['report'], { cwd });
+    expect(noTraces.exitCode).toBe(1);
+    expect(noTraces.stderr).toContain('missing required --traces <dir> argument');
+
+    writeRc({ traces: k0TracesDir });
+    const noDir = runCliSubprocess(['report'], { cwd });
+    expect(noDir.exitCode).toBe(1);
+    expect(noDir.stderr).toContain('missing <dir> argument');
+  });
+
+  it('config json:true switches the output to JSON', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir, json: true });
+    const result = runCliSubprocess(['report'], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect((JSON.parse(result.stdout) as { totalPaths: number }).totalPaths).toBe(5);
+  });
+
+  it('config out writes the report to that path (relative to cwd)', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir, out: 'report.txt' });
+    const result = runCliSubprocess(['report'], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(path.join(cwd, 'report.txt'), 'utf8')).toBe(result.stdout);
+  });
+
+  it('config include keeps only the listed files', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir, include: ['order-workflow.ts'] });
+    const result = runCliSubprocess(['report'], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('orderWorkflow');
+    expect(result.stdout).not.toContain('pollingWorkflow');
+    expect(result.stdout).toContain('2 paths total · 1 covered');
+  });
+
+  it('a CLI --include flag overrides config include', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir, include: ['order-workflow.ts'] });
+    const result = runCliSubprocess(['report', '--include', 'polling-workflow.ts'], { cwd });
+    expect(result.stdout).toContain('pollingWorkflow');
+    expect(result.stdout).not.toContain('orderWorkflow');
+  });
+
+  it('--include and --exclude work as plain CLI flags with no config, comma-separated', () => {
+    const inc = runCliSubprocess(['report', h3Dir, '--traces', k0TracesDir, '--include', 'order-workflow.ts,polling-workflow.ts'], { cwd });
+    expect(inc.stdout).toContain('5 paths total');
+    const exc = runCliSubprocess(['report', h3Dir, '--traces', k0TracesDir, '--exclude', 'polling-workflow.ts'], { cwd });
+    expect(exc.stdout).toContain('2 paths total');
+    expect(exc.stdout).not.toContain('pollingWorkflow');
+  });
+
+  it('warns on stderr, without failing, when an include or exclude entry matches nothing', () => {
+    const result = runCliSubprocess(
+      ['report', h3Dir, '--traces', k0TracesDir, '--include', 'order-workflow.ts,ghost.ts', '--exclude', 'phantom.ts'],
+      { cwd },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('ghost.ts');
+    expect(result.stderr).toContain('phantom.ts');
+    expect(result.stdout).toContain('orderWorkflow');
+  });
+
+  it('reports the existing "no exported workflow functions" error when the filter removes everything', () => {
+    const result = runCliSubprocess(['report', h3Dir, '--traces', k0TracesDir, '--include', 'ghost.ts'], { cwd });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no exported workflow functions found');
+  });
+
+  it('fails clearly, naming the file, on a malformed config — never falling back to defaults', () => {
+    writeRc('{ "traces": ');
+    const result = runCliSubprocess(['report', h3Dir, '--traces', k0TracesDir], { cwd });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('.pathkitrc.json');
+    expect(result.stderr).toContain('not valid JSON');
+  });
+
+  it('fails clearly on a wrong-typed config value', () => {
+    writeRc({ include: 'order-workflow.ts' });
+    const result = runCliSubprocess(['report', h3Dir, '--traces', k0TracesDir], { cwd });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('"include" must be an array of strings');
+  });
+
+  it('warns on stderr about an unknown config key (visible, not swallowed) but still runs', () => {
+    writeRc({ workflowsDir: h3Dir, tracse: k0TracesDir, traces: k0TracesDir });
+    const result = runCliSubprocess(['report'], { cwd });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('unknown key "tracse"');
+    expect(result.stdout).toContain('5 paths total');
+  });
+
+  it('ignores a .pathkitrc.json in a parent directory (cwd only, no upward search)', () => {
+    writeRc({ workflowsDir: h3Dir, traces: k0TracesDir });
+    const child = path.join(cwd, 'child');
+    mkdirSync(child);
+    const result = runCliSubprocess(['report'], { cwd: child });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('missing <dir> argument');
+  });
+
+  it('does not affect analyze or coverage (report-only)', () => {
+    writeRc('{ malformed');
+    const result = runCliSubprocess(['analyze', path.join(h3Dir, 'order-workflow.ts')], { cwd });
+    expect(result.exitCode).toBe(0);
   });
 });

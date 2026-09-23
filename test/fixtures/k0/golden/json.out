@@ -1,0 +1,75 @@
+{
+  "rows": [
+    {
+      "filePath": "test/fixtures/h3/order-workflow.ts",
+      "functionName": "orderWorkflow",
+      "totalPaths": 2,
+      "coveredCount": 1,
+      "percentage": 50,
+      "bucket": "partial",
+      "truncated": false,
+      "paths": [
+        {
+          "edgeIndices": [
+            0,
+            1
+          ],
+          "description": "Start -> if (isHeads) --true--> End",
+          "covered": true
+        },
+        {
+          "edgeIndices": [
+            0,
+            2
+          ],
+          "description": "Start -> if (isHeads) --false--> End",
+          "covered": false
+        }
+      ],
+      "unmatchedTraces": []
+    },
+    {
+      "filePath": "test/fixtures/h3/polling-workflow.ts",
+      "functionName": "pollingWorkflow",
+      "totalPaths": 3,
+      "coveredCount": 0,
+      "percentage": 0,
+      "bucket": "none",
+      "truncated": false,
+      "paths": [
+        {
+          "edgeIndices": [
+            0,
+            1,
+            2,
+            4
+          ],
+          "description": "Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --retry--> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End",
+          "covered": false
+        },
+        {
+          "edgeIndices": [
+            0,
+            1,
+            3
+          ],
+          "description": "Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --iterate--> if (status === 'complete') --true--> End",
+          "covered": false
+        },
+        {
+          "edgeIndices": [
+            0,
+            4
+          ],
+          "description": "Start -> for (let attempt = 1; attempt <= maxAttempts; attempt++) --exit--> End",
+          "covered": false
+        }
+      ],
+      "unmatchedTraces": []
+    }
+  ],
+  "totalPaths": 5,
+  "coveredCount": 1,
+  "percentage": 20,
+  "bucket": "partial"
+}

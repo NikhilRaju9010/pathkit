@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { buildWorkflowGraph } from './graph';
 import { colorize, shouldColorize } from './color';
 import { CoverageReport, listTraceFiles, mergeCoverageTraces } from './coverageReport';
+import { loadConfig, PathKitConfig } from './config';
+import { filterWorkflows } from './workflowFilter';
 import { discoverWorkflows } from './discovery';
 import { PathKitError } from './errors';
 import {
@@ -381,12 +383,29 @@ interface ReportArgs {
   noColor: boolean;
   allowStale: boolean;
   htmlPath: string | undefined;
+  include: string[] | undefined;
+  exclude: string[] | undefined;
 }
 
 function runReport(args: string[], io: CliIO): number {
   const usage =
     'Usage: pathkit report <dir> --traces <dir> [--out <path>] [--json] [--no-color] [--allow-stale] [--html [path]]\n';
-  const { dir, tracesDir, outPath, json, noColor, allowStale, htmlPath } = parseReportArgs(args);
+  const parsed = parseReportArgs(args);
+
+  // Precedence: CLI flag > .pathkitrc.json value > built-in default. Merged
+  // *before* the required-argument checks below, so those errors only
+  // disappear when the config genuinely supplies the value.
+  let merged: ReportArgs;
+  try {
+    merged = mergeReportConfig(parsed, loadConfig(process.cwd(), (message) => io.stderr(`pathkit report: ${message}\n`)));
+  } catch (err) {
+    if (err instanceof PathKitError) {
+      io.stderr(`pathkit report: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+  const { dir, tracesDir, outPath, json, noColor, allowStale, htmlPath, include, exclude } = merged;
 
   if (dir === undefined) {
     io.stderr(`pathkit report: missing <dir> argument. ${usage}`);
@@ -408,14 +427,19 @@ function runReport(args: string[], io: CliIO): number {
     throw err;
   }
 
-  if (discovered.workflows.length === 0) {
+  const { filtered, unmatched } = filterWorkflows(discovered.workflows, include, exclude);
+  for (const entry of unmatched) {
+    io.stderr(`pathkit report: --include/--exclude entry "${entry}" matched no discovered workflow file.\n`);
+  }
+
+  if (filtered.length === 0) {
     io.stderr(`pathkit report: no exported workflow functions found under ${dir}.\n`);
     return 1;
   }
 
   let report: ProjectReport;
   try {
-    report = buildProjectReport(discovered.workflows, tracesDir, { allowStale });
+    report = buildProjectReport(filtered, tracesDir, { allowStale });
   } catch (err) {
     if (err instanceof PathKitError) {
       io.stderr(`pathkit report: ${err.message}\n`);
@@ -493,11 +517,17 @@ function parseReportArgs(args: string[]): ReportArgs {
   let noColor = false;
   let allowStale = false;
   let htmlPath: string | undefined;
+  let include: string[] | undefined;
+  let exclude: string[] | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--traces') {
+    if (arg === '--include') {
+      include = parseCommaList(args[++i]);
+    } else if (arg === '--exclude') {
+      exclude = parseCommaList(args[++i]);
+    } else if (arg === '--traces') {
       tracesDir = args[++i];
     } else if (arg === '--out') {
       outPath = args[++i];
@@ -524,7 +554,38 @@ function parseReportArgs(args: string[]): ReportArgs {
     }
   }
 
-  return { dir: positional[0], tracesDir, outPath, json, noColor, allowStale, htmlPath };
+  return { dir: positional[0], tracesDir, outPath, json, noColor, allowStale, htmlPath, include, exclude };
+}
+
+function parseCommaList(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+}
+
+/**
+ * Fills every field the command line left unset from the config. Boolean
+ * flags can only be turned on from the CLI (there is no `--no-json` etc.),
+ * so a config `true` cannot be switched off for one run.
+ */
+function mergeReportConfig(args: ReportArgs, config: PathKitConfig): ReportArgs {
+  let htmlPath = args.htmlPath;
+  if (htmlPath === undefined && config.html !== undefined && config.html !== false) {
+    htmlPath = config.html === true ? DEFAULT_HTML_PATH : config.html;
+  }
+  return {
+    dir: args.dir ?? config.workflowsDir,
+    tracesDir: args.tracesDir ?? config.traces,
+    outPath: args.outPath ?? config.out,
+    json: args.json || config.json === true,
+    noColor: args.noColor || config.noColor === true,
+    allowStale: args.allowStale || config.allowStale === true,
+    htmlPath,
+    include: args.include ?? config.include,
+    exclude: args.exclude ?? config.exclude,
+  };
 }
 
 function getPackageVersion(): string {
