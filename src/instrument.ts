@@ -291,9 +291,7 @@ function tryCatchEdits(
     const successIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'success');
     const failureIdx = resolveOutcomeIndex(outcomeEdgeIndex, node.id, 'failure');
 
-    const tryBlock = astNode.getTryBlock();
-    const successPos = successPushPosition(tryBlock);
-    edits.push({ start: successPos, end: successPos, text: `${pushStatement(traceVarName, successIdx)} ` });
+    edits.push(...successPushEdits(astNode.getTryBlock(), traceVarName, successIdx));
 
     const catchBlock = catchClause.getBlock();
     const failurePos = catchBlock.getStart() + 1; // right after the catch block's opening `{`
@@ -304,31 +302,60 @@ function tryCatchEdits(
 }
 
 /**
- * A `try` block whose last statement is a `return` (e.g. the common
- * `try { return await someActivity(); } catch (err) { ... }` shape) exits
- * the enclosing function from inside that statement — anything textually
- * after it in the same block is unreachable dead code. Inserting the
- * success push at `tryBlock.getEnd() - 1` (right before the closing `}`)
- * in that case produces exactly that: a push call that is syntactically
- * present but never actually executes, so `pathkit coverage` permanently
- * shows this try/catch's "success" outcome as `missed` no matter how many
- * times a real test exercises it (found piloting coverage tracking
- * against a real project's `paymentProcessingWorkflow`, whose only
- * top-level statement inside its outer try is exactly this pattern — see
- * LIMITATIONS.md). The fix is to insert the push immediately before that
- * trailing `return` instead of after it, so it executes right before the
- * function actually returns. Any other trailing statement shape (a plain
- * expression statement, an if/loop, etc.) is unaffected and keeps using
- * the position right before the closing `}`, since falling off the end of
- * the try block normally in those cases is exactly what "success" means.
+ * Edits that record the "success" outcome of a try/catch-around-activity.
+ *
+ * Normally that is a single `push()` inserted as the last statement of the
+ * `try` block — reached only by falling off its end, i.e. nothing threw.
+ *
+ * When the try block's last statement is `return <expr>;` (the common
+ * `try { return await someActivity(); } catch (err) { ... }` shape, found
+ * piloting a real project's `paymentProcessingWorkflow`) that position is
+ * dead code: the function has already returned. Two earlier attempts and
+ * why they were wrong:
+ *  - push at the block's closing `}` (original): unreachable, so the
+ *    success outcome could never be recorded;
+ *  - push immediately before the `return` (d0aa17a): reachable, but it runs
+ *    *before* `<expr>` is evaluated. If the awaited activity then rejects,
+ *    control lands in the `catch` with "success" already recorded, so the
+ *    trace is `[success, failure]` — matching no declared path (confirmed by
+ *    a live TestWorkflowEnvironment run; see test/coverage-e2e.test.ts).
+ *
+ * The fix binds the returned value first, records success only once it has
+ * actually resolved, then returns it:
+ *
+ *   return await doWork();
+ *     ==>  const __pathkitTryResult<N> = await doWork();
+ *          <push success>
+ *          return __pathkitTryResult<N>;
+ *
+ * so a rejection throws out of the `const` initializer before the push is
+ * reached. A bare `return;` has no expression to evaluate, so the push just
+ * goes before it. The binding's name includes the (unique) success edge
+ * index and lives in the try block's own scope, so it cannot collide with
+ * user variables or another try block's binding.
  */
-function successPushPosition(tryBlock: Block): number {
+function successPushEdits(tryBlock: Block, traceVarName: string, successIdx: number): TextEdit[] {
+  const push = pushStatement(traceVarName, successIdx);
   const statements = tryBlock.getStatements();
   const lastStatement = statements[statements.length - 1];
+
   if (lastStatement !== undefined && Node.isReturnStatement(lastStatement)) {
-    return lastStatement.getStart();
+    const expression = lastStatement.getExpression();
+    if (expression === undefined) {
+      const pos = lastStatement.getStart();
+      return [{ start: pos, end: pos, text: `${push} ` }];
+    }
+    const resultVar = `__pathkitTryResult${successIdx}`;
+    return [
+      // `return ` (plus any comment before the expression) -> `const <var> = `
+      { start: lastStatement.getStart(), end: expression.getStart(), text: `const ${resultVar} = ` },
+      // after the whole statement (including its `;`): record success, then return the bound value
+      { start: lastStatement.getEnd(), end: lastStatement.getEnd(), text: ` ${push} return ${resultVar};` },
+    ];
   }
-  return tryBlock.getEnd() - 1; // right before the try block's closing `}`
+
+  const pos = tryBlock.getEnd() - 1; // right before the try block's closing `}`
+  return [{ start: pos, end: pos, text: `${push} ` }];
 }
 
 /**

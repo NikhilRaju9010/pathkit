@@ -57,6 +57,7 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
     args: unknown[],
     activities?: Record<string, (...args: string[]) => Promise<unknown>>,
     onStarted?: (handle: WorkflowHandle) => Promise<void>,
+    allowWorkflowFailure = false,
   ): Promise<unknown> {
     const filePath = path.join(__dirname, 'fixtures', milestone, fixtureFile);
     const instrumentedPath = writeInstrumentedCopy(filePath, functionName);
@@ -83,7 +84,13 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
         if (onStarted !== undefined) {
           await onStarted(handle);
         }
-        await handle.result();
+        if (allowWorkflowFailure) {
+          // The trace is still queryable after a workflow fails; the caller
+          // asserts on the failure itself via `onStarted`'s captured handle.
+          await handle.result().catch(() => undefined);
+        } else {
+          await handle.result();
+        }
         return handle.query(`__pathkit_coverage__${functionName}`);
       });
     } finally {
@@ -159,6 +166,92 @@ describe('coverage e2e (Gap 2): real Temporal execution proof', () => {
           },
         });
         expect(trace).toEqual([expectedEdgeIndex('failure')]);
+      },
+      30_000,
+    );
+  });
+
+  describe('d0aa17a follow-up: try { return await activity() } catch — trailing-return shape', () => {
+    function expectedEdgeIndex(label: 'success' | 'failure'): string {
+      const filePath = path.join(__dirname, 'fixtures', 'd0', 'try-return-await.ts');
+      const fn = parseWorkflowFile(filePath).find((f) => f.name === 'tryReturnAwaitWorkflow')!;
+      const graph = buildWorkflowGraph(fn.node, 'tryReturnAwaitWorkflow');
+      const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
+      return String(graph.edges.findIndex((e) => e.from === decisionId && e.label === label));
+    }
+
+    it(
+      'records exactly the success edge when the awaited activity resolves',
+      async () => {
+        const trace = await runAndQueryTrace('d0', 'try-return-await.ts', 'tryReturnAwaitWorkflow', [], {
+          doWork: async () => 'ok',
+        });
+        expect(trace).toEqual([expectedEdgeIndex('success')]);
+      },
+      30_000,
+    );
+
+    it(
+      'records exactly the failure edge — and NOT the success edge — when the awaited activity rejects',
+      async () => {
+        const trace = await runAndQueryTrace('d0', 'try-return-await.ts', 'tryReturnAwaitWorkflow', [], {
+          doWork: async () => {
+            throw new Error('boom');
+          },
+        });
+        expect(trace).toEqual([expectedEdgeIndex('failure')]);
+      },
+      30_000,
+    );
+  });
+
+  describe('d0aa17a follow-up: `return activity()` WITHOUT await inside try', () => {
+    function successEdgeIndex(): string {
+      const filePath = path.join(__dirname, 'fixtures', 'd0', 'try-return-noawait.ts');
+      const fn = parseWorkflowFile(filePath).find((f) => f.name === 'tryReturnNoAwaitWorkflow')!;
+      const graph = buildWorkflowGraph(fn.node, 'tryReturnNoAwaitWorkflow');
+      const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
+      return String(graph.edges.findIndex((e) => e.from === decisionId && e.label === 'success'));
+    }
+
+    // Pins a known, documented limitation (see LIMITATIONS.md), not a desired
+    // behavior: without `await`, the source's own `catch` is dead code, so a
+    // rejecting activity FAILS the workflow while the trace still records the
+    // "success" edge. If PathKit ever learns to detect this, this test should
+    // be updated deliberately.
+    it(
+      'a rejecting activity fails the workflow, yet the trace records only the success edge (the catch never ran)',
+      async () => {
+        let captured: WorkflowHandle | undefined;
+        const trace = await runAndQueryTrace(
+          'd0',
+          'try-return-noawait.ts',
+          'tryReturnNoAwaitWorkflow',
+          [],
+          {
+            doWork: async () => {
+              throw new Error('boom');
+            },
+          },
+          async (handle) => {
+            captured = handle;
+          },
+          true,
+        );
+
+        await expect(captured!.result()).rejects.toThrow();
+        expect(trace).toEqual([successEdgeIndex()]);
+      },
+      30_000,
+    );
+
+    it(
+      'a resolving activity records the success edge and returns normally',
+      async () => {
+        const trace = await runAndQueryTrace('d0', 'try-return-noawait.ts', 'tryReturnNoAwaitWorkflow', [], {
+          doWork: async () => 'ok',
+        });
+        expect(trace).toEqual([successEdgeIndex()]);
       },
       30_000,
     );

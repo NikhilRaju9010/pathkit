@@ -62,7 +62,7 @@ describe('writeInstrumentedCopy — G5 real try/catch-around-activity instrument
     }
   });
 
-  it('inserts the success push before a trailing `return`, not after it, so the push is actually reachable', () => {
+  it('binds a trailing `return <expr>` first and pushes success only after the value resolves', () => {
     const { instrumentedText, cleanup } = instrumentAndRead('m3', 'try-catch-trailing-return.ts', 'chargeCardReturningDirectlyWorkflow');
     try {
       assertSyntacticallyValid(instrumentedText);
@@ -73,16 +73,13 @@ describe('writeInstrumentedCopy — G5 real try/catch-around-activity instrument
       const decisionId = graph.nodes.find((n) => n.kind === 'decision')!.id;
       const successIdx = graph.edges.findIndex((e) => e.from === decisionId && e.label === 'success');
 
-      const successPushText = `__pathkitTrace__chargeCardReturningDirectlyWorkflow.push('${successIdx}');`;
-      const successPushPos = instrumentedText.indexOf(successPushText);
-      const returnPos = instrumentedText.indexOf('return await chargeCard(accountId);');
-
-      expect(successPushPos).toBeGreaterThan(-1);
-      // The push must come BEFORE the return, not after it — inserted
-      // after, it would be unreachable dead code and this try's "success"
-      // outcome would never actually get recorded by a real test run.
-      expect(successPushPos).toBeLessThan(returnPos);
-      expect(instrumentedText).toContain(`${successPushText} return await chargeCard(accountId);`);
+      const v = `__pathkitTryResult${successIdx}`;
+      const push = `__pathkitTrace__chargeCardReturningDirectlyWorkflow.push('${successIdx}');`;
+      // The awaited expression is evaluated in the initializer, so a rejection
+      // throws before the push is reached; the push is not before the await
+      // (the earlier d0aa17a placement) and not after the return (dead code).
+      expect(instrumentedText).toContain(`const ${v} = await chargeCard(accountId); ${push} return ${v};`);
+      expect(instrumentedText).not.toContain('return await chargeCard(accountId)');
     } finally {
       cleanup();
     }
