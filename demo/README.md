@@ -6,4 +6,10 @@ Realistic, readable Temporal workflow files used for **manual** visual verificat
 - `report-polling-workflow.ts` — a retry/poll loop: starts a report job, then polls its status on an interval until it completes, fails, or a max attempt count is reached.
 - `approval-signal-workflow.ts` — a signal-driven workflow: waits for one of two signals (approve/deny) before finalizing or cancelling a purchase order.
 
-Until `pathkit analyze` and Mermaid rendering exist (M7), these are checked with a throwaway local script that calls the library functions built so far directly — see `CLAUDE.md`'s Decisions Log for why.
+Try them with the real CLI:
+
+```bash
+node bin/pathkit analyze demo/report-polling-workflow.ts
+node bin/pathkit analyze demo/report-polling-workflow.ts --mermaid   # paste into https://mermaid.live
+node bin/pathkit report demo --traces .pathkit/coverage              # after recording traces
+```

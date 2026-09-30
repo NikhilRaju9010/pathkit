@@ -381,7 +381,11 @@ Developed and tested against `@temporalio/workflow`, `@temporalio/testing`, `@te
 
 ## Scope
 
-PathKit v1 analyzes **one workflow file at a time**. It does not follow imports across files and does not do cross-project type resolution. See [LIMITATIONS.md](./LIMITATIONS.md) for the full list of known scope boundaries.
+Each workflow file is analyzed on its own: PathKit does not follow imports across files (including `executeChild` into another workflow file) and does not do cross-project type resolution. `pathkit analyze` takes one file; `pathkit report` scans a whole directory but still analyzes every file independently. See [LIMITATIONS.md](./LIMITATIONS.md) for the full list of known scope boundaries.
+
+### Known coverage bug
+
+A decision nested inside a `try` block, with more code after it before the `try` closes, can fail to match its declared path, so `pathkit coverage`/`report` under-report it and log the trace as unmatched. This is a known, open bug — see [LIMITATIONS.md](./LIMITATIONS.md) (Gap 2).
 
 ## License
 

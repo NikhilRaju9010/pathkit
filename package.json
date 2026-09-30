@@ -1,7 +1,7 @@
 {
   "name": "@nikhilrajutirlange/pathkit",
   "version": "0.9.0",
-  "description": "Static path/branch graph analysis for Temporal TypeScript workflows — finds every possible execution path (success, failure, retry, timeout, signal) and renders it as a Mermaid diagram.",
+  "description": "Static path/branch analysis and path-coverage tracking for Temporal TypeScript workflows — lists every possible execution path (success, failure, retry, timeout, signal), reports which ones your tests exercised, and can render Mermaid diagrams or an HTML report.",
   "keywords": [
     "temporal",
     "temporal-io",

@@ -68,3 +68,15 @@ details and design rationale live in the plan document this section mirrors
 - [x] **H6** — Final `demo/` walkthrough + full-suite verification (documentation only, no `src/` changes).
 
 **Gap 3 (combined multi-file paths + coverage report) is complete as of H6**, alongside Gap 1's (M0–M7) and Gap 2's (G0–G11) own completions — all three pieces of PathKit's scope are now shipped. The final `demo/` walkthrough, from a clean `npm ci` install, ran `npm run lint && npm run typecheck && npm test && npm run smoke` (all clean, 22 suites, 182 tests), then four real `prepareCoverageRun`/`recordCoverageTrace` executions through a live, shared `TestWorkflowEnvironment` across all three `demo/` workflows — `reportPollingWorkflow` (succeeding immediately, then failing immediately), `orderProcessingWorkflow` (its rejection path), and `approvalSignalWorkflow` (a `approvalDenied` signal) — followed by `pathkit report demo/ --traces <dir>`. Result: `9 paths total · 4 covered · 5 missed · 44.4% project coverage`, with each row's numbers agreeing exactly with `analyze`'s own known per-file path counts (2+3+4=9) and with the specific paths each live run actually drove.
+
+## Later milestones (post-Gap 3)
+
+Shipped after Gap 3; full reasoning for each is in `CLAUDE.md`'s Decisions Log.
+
+- [x] **Default `analyze` output** — plain numbered path list by default; Mermaid moved behind `--mermaid` (`0.6.0`).
+- [x] **Milestone I** — `analyze --summary` / `--limit <n>`, spaced output, display data extracted into `src/pathListing.ts` (`0.7.0`).
+- [x] **Milestone J** — self-contained HTML report via `analyze --html` / `report --html` (Analysis + Coverage tabs, history trend), persisted in `.pathkit/report-data.json` (`0.8.0`).
+- [x] **Milestone K** — `.pathkitrc.json` project config for `report`, plus `--include`/`--exclude` (`0.9.0`).
+- [x] **Pilot fixes** — unlabeled `break` in loops; trailing-comma named-import merge; try/catch success push after a trailing `return` (value resolves first).
+
+**Open (see `LIMITATIONS.md`):** a decision nested inside a `try` never matches its declared path (Gap 2 ordering bug); `throw` inside `try` does not route to its `catch`; `executeChild` and `Promise.all`/`allSettled` are not modeled; labeled `break` and `continue` are unhandled; `report` has no `--summary`/`--limit`.
